@@ -1,10 +1,12 @@
 use std::fmt;
+use std::fs::File;
 use structopt::StructOpt;
 use usbapi::{ControlTransfer, UsbCore, UsbEnumerate};
 enum Error {
     DeviceNotFound(String),
     Argument(String),
     InvalidControlResponse(String),
+    InvalidState(Status, State),
     USB(String, std::io::Error),
     USBNix(String, nix::Error),
 }
@@ -18,6 +20,7 @@ impl From<Error> for i32 {
             USB(_, _) => 66,
             USBNix(_, _) => 67,
             InvalidControlResponse(_) => 68,
+            InvalidState(_, _) => 69,
         }
     }
 }
@@ -31,6 +34,11 @@ impl fmt::Display for Error {
             USB(e, io) => write!(f, "USB {} failed cause {}", e, io),
             USBNix(e, io) => write!(f, "USB {} failed cause {}", e, io),
             InvalidControlResponse(w) => write!(f, "Invalid control response on {}", w),
+            InvalidState(s, expect) => write!(
+                f,
+                "Invalid state Get status gave:\n{}\nExpected state: {}",
+                s, expect
+            ),
         }
     }
 }
@@ -83,12 +91,10 @@ impl Args {
 
 #[allow(dead_code)]
 const DFU_DETACH: u8 = 0;
-#[allow(dead_code)]
 const DFU_DNLOAD: u8 = 1;
 #[allow(dead_code)]
 const DFU_UPLOAD: u8 = 2;
 const DFU_GET_STATUS: u8 = 3;
-#[allow(dead_code)]
 const DFU_CLRSTATUS: u8 = 4;
 #[allow(dead_code)]
 const DFU_GETSTATE: u8 = 5;
@@ -190,23 +196,26 @@ impl Status {
     pub fn get(usb: &mut UsbCore, interface: u16) -> Result<Self, Error> {
         let mut s = Self::default();
         use usbapi::os::linux::usbfs::*;
-        let buf = Vec::with_capacity(6);
+        let buf = vec![0 as u8; 6];
         let ctl = ControlTransfer::new(
             ENDPOINT_IN | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_GET_STATUS,
             0,
             interface,
-            buf,
+            Some(buf),
             0,
         );
         let data = usb
             .control(ctl)
-            .map_err(|e| Error::USBNix("Control transfer".into(), e))?;
+            .map_err(|e| Error::USBNix("Control transfer: DFU_GET_STATUS".into(), e))?;
 
         println!("{:X?}", data);
         let mut data = data.iter();
         if data.len() != 6 {
-            return Err(Error::InvalidControlResponse("Status".into()));
+            return Err(Error::InvalidControlResponse(format!(
+                "Status length was {}",
+                data.len()
+            )));
         }
         s.status = *(data.next().unwrap_or(&(0 as u8)));
         s.poll_timeout = ((*(data.next().unwrap_or(&(0 as u8))) as usize) << 16) as usize;
@@ -218,50 +227,160 @@ impl Status {
     }
 }
 
+pub enum DfuseCommand {
+    SetAddress(u32),
+    ErasePage(u32),
+    MassErase,
+    ReadUnprotected,
+}
+
+impl From<DfuseCommand> for Vec<u8> {
+    fn from(command: DfuseCommand) -> Vec<u8> {
+        use crate::DfuseCommand::*;
+        let mut buf = Vec::new();
+        let address = match command {
+            SetAddress(address) => {
+                buf.push(0x21 as u8);
+                Some(address)
+            }
+            ErasePage(address) => {
+                buf.push(0x41 as u8);
+                Some(address)
+            }
+            MassErase => {
+                buf.push(0x41 as u8);
+                None
+            }
+            ReadUnprotected => {
+                buf.push(0x92 as u8);
+                None
+            }
+        };
+
+        if let Some(address) = address {
+            buf.push((address & 0xFF) as u8);
+            buf.push((address >> 8) as u8);
+            buf.push((address >> 16) as u8);
+            buf.push((address >> 24) as u8);
+        }
+
+        buf
+    }
+}
+
+mod tests {
+    use crate::DfuseCommand;
+    #[test]
+    fn test_dfuse_command() {
+        let vec = Vec::from(DfuseCommand::MassErase);
+        assert!(true, vec.len() == 1);
+        assert!(true, vec[0] == 0x41);
+
+        let vec = Vec::from(DfuseCommand::ReadUnprotected);
+        assert!(true, vec.len() == 1);
+        assert!(true, vec[0] == 0x92);
+
+        let vec = Vec::from(DfuseCommand::SetAddress(0x08100000));
+        assert!(true, vec.len() == 5);
+        assert!(true, vec[0] == 0x21);
+        assert!(true, vec[1] == 0x00);
+        assert!(true, vec[2] == 0x00);
+        assert!(true, vec[3] == 0x01);
+        assert!(true, vec[4] == 0x08);
+
+        let vec = Vec::from(DfuseCommand::ErasePage(0x08100200));
+        assert!(true, vec.len() == 5);
+        assert!(true, vec[0] == 0x41);
+        assert!(true, vec[1] == 0x00);
+        assert!(true, vec[2] == 0x02);
+        assert!(true, vec[3] == 0x01);
+        assert!(true, vec[4] == 0x08);
+    }
+}
+
 struct Dfu {
     usb: UsbCore,
     timeout: u32,
+    interface: u16,
 }
 
+impl Drop for Dfu {
+    fn drop(&mut self) {
+        self.usb
+            .release_interface(self.interface as u32)
+            .unwrap_or_else(|e| {
+                eprintln!("Release interface failed with {}", e);
+            });
+    }
+}
 impl Dfu {
     pub fn from_bus_address(bus: u8, address: u8) -> Result<Self, Error> {
         let mut usb =
             UsbCore::from_bus_address(bus, address).map_err(|e| Error::USB("open".into(), e))?;
+        usb.claim_interface(0).unwrap_or_else(|e| {
+            eprintln!("Claim interface failed with {}", e);
+        });
         println!("{}", usb.get_descriptor_string(1));
         let timeout = 3000;
-        Ok(Self { usb, timeout })
+        Ok(Self {
+            usb,
+            timeout,
+            interface: 0,
+        })
     }
 
-    pub fn get_status(&mut self, interface: u16) -> Result<Status, Error> {
-        Status::get(&mut self.usb, interface)
+    pub fn get_status(&mut self, mut retries: u8) -> Result<Status, Error> {
+        let mut status = Err(Error::Argument("Get status retries failed".into()));
+        retries += 1;
+        while retries > 0 {
+            retries -= 1;
+            status = Status::get(&mut self.usb, self.interface);
+            if let Err(e) = &status {
+                if let Error::USBNix(_, e) = e {
+                    if let nix::Error::Sys(e) = e {
+                        if *e == nix::errno::Errno::EPIPE {
+                            eprintln!("try again");
+                            std::thread::sleep(std::time::Duration::from_millis(3000));
+                            continue;
+                        }
+                    }
+                } else if let Error::InvalidControlResponse(_) = e {
+                    eprintln!("try again inv");
+                    std::thread::sleep(std::time::Duration::from_millis(3000));
+                    continue;
+                }
+            }
+            retries = 0;
+        }
+        status
     }
 
-    pub fn clear_status(&mut self, interface: u16) -> Result<(), Error> {
+    pub fn clear_status(&mut self) -> Result<(), Error> {
         use usbapi::os::linux::usbfs::*;
-        let ctl = ControlTransfer::no_data(
+        let ctl = ControlTransfer::new(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_CLRSTATUS,
             0,
-            interface,
+            self.interface,
+            None,
             self.timeout,
         );
-        println!("bailed");
         let _ = self
             .usb
             .control(ctl)
             .map_err(|e| Error::USBNix("Control transfer".into(), e))?;
 
-        println!("bailed not");
         Ok(())
     }
 
-    pub fn detach(&mut self, interface: u16) -> Result<(), Error> {
+    pub fn detach(&mut self) -> Result<(), Error> {
         use usbapi::os::linux::usbfs::*;
-        let ctl = ControlTransfer::no_data(
+        let ctl = ControlTransfer::new(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_DETACH,
             0,
-            interface,
+            self.interface,
+            None,
             self.timeout,
         );
         let _ = self
@@ -270,6 +389,55 @@ impl Dfu {
             .map_err(|e| Error::USBNix("Control transfer".into(), e))?;
 
         Ok(())
+    }
+
+    fn wait_manifest(&mut self, mut retries: u8) -> Result<(), Error> {
+        retries += 1;
+        let mut s = self.get_status(100)?;
+        while retries > 0 {
+            if s.state == u8::from(State::DfuManifest) {
+                return Ok(());
+            }
+            retries -= 1;
+            s = self.get_status(100)?;
+        }
+        Err(Error::InvalidState(s, State::DfuManifest))
+    }
+
+    pub fn reset_stm32(&mut self, address: u32) -> Result<Status, Error> {
+        self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+        self.wait_manifest(0)?;
+        self.dfuse_download(None, 2)?;
+        self.get_status(100)
+    }
+
+    pub fn dfuse_do_upload(&mut self, xfer_size: isize, file: &File) -> Result<(), Error> {
+        panic!("not implemented");
+    }
+
+    pub fn dfuse_do_dnload(&mut self, xfer_size: usize, file: &File) -> Result<(), Error> {
+        panic!("not implemented");
+    }
+
+    pub fn dfuse_download(&mut self, buf: Option<Vec<u8>>, transaction: u16) -> Result<(), Error> {
+        use usbapi::os::linux::usbfs::*;
+        let ctl = ControlTransfer::new(
+            ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
+            DFU_DNLOAD,
+            transaction,
+            self.interface,
+            buf,
+            self.timeout,
+        );
+        match self.usb.control(ctl.clone()) {
+            Err(nix::Error::Sys(e)) if e == nix::errno::Errno::EPIPE => {
+                eprintln!("dl stalled on {:X?}", ctl);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                Ok(())
+            }
+            Err(e) => Err(Error::USBNix("Dfuse command failed".into(), e)),
+            Ok(_) => Ok(()),
+        }
     }
 }
 
@@ -292,10 +460,8 @@ fn run_main() -> Result<(), Error> {
     println!("{}:{}", args.bus, args.address);
     let mut dfu = Dfu::from_bus_address(args.bus, args.address)?;
     println!("{}", dfu.get_status(0)?);
-    let _ = dfu.clear_status(0)?;
-    println!("{}", dfu.get_status(0)?);
-    let _ = dfu.detach(0)?;
-    println!("{}", dfu.get_status(0)?);
+    let s = dfu.reset_stm32(0x0800_0000)?;
+    println!("{}", s);
 
     Ok(())
 }
