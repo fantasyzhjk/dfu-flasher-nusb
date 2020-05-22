@@ -63,13 +63,13 @@ impl Dfu {
                 if let Error::USBNix(_, e) = e {
                     if let nix::Error::Sys(e) = e {
                         if *e == nix::errno::Errno::EPIPE {
-                            eprintln!("try again");
+                            eprintln!("Epipe try again");
                             std::thread::sleep(std::time::Duration::from_millis(3000));
                             continue;
                         }
                     }
                 } else if let Error::InvalidControlResponse(_) = e {
-                    eprintln!("try again inv");
+                    eprintln!("Invalid control response");
                     std::thread::sleep(std::time::Duration::from_millis(3000));
                     continue;
                 }
@@ -197,15 +197,11 @@ impl Dfu {
             } else {
                 length = 0;
             }
-            let v = self.dfuse_do_upload(file, transfer)?;
+            let v = self.dfuse_upload(transfer)?;
             file.write_all(&v)?;
             transfer += 1;
         }
         Ok(())
-    }
-
-    pub fn dfuse_do_upload(&mut self, file: &mut File, tx: u16) -> Result<Vec<u8>, Error> {
-        self.dfuse_upload(tx)
     }
 
     pub fn abort_to_idle(&mut self) -> Result<(), Error> {
@@ -242,10 +238,9 @@ impl Dfu {
             buf,
             self.timeout,
         );
-        println!("req is\n{:X?}", ctl);
         match self.usb.control(ctl.clone()) {
             Err(nix::Error::Sys(e)) if e == nix::errno::Errno::EPIPE => {
-                eprintln!("dl stalled on {:X?}", ctl);
+                eprintln!("stalled on {:X?}", ctl);
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 Ok(())
             }
