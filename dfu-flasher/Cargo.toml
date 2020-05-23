@@ -5,8 +5,10 @@ authors = ["mikael <mike7b4@protonmail.com>"]
 edition = "2018"
 
 [dependencies]
+log = ""
 structopt = "0.3"
 nix = ""
+env_logger = ""
 #usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
 
 usbapi = {"path" = "../../usbapi-rs"}

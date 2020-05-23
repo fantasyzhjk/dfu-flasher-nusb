@@ -1,5 +1,6 @@
 use crate::dfu_status::{State, Status};
 use std::fmt;
+#[derive(Debug)]
 pub enum Error {
     DeviceNotFound(String),
     Argument(String),
@@ -10,6 +11,7 @@ pub enum Error {
     USBNix(String, nix::Error),
     FileIO(std::io::Error),
     UnknownCommandByte(u8),
+    Address(u32),
 }
 
 impl From<std::io::Error> for Error {
@@ -31,6 +33,7 @@ impl From<Error> for i32 {
             InvalidStatus(_, _) => 70,
             FileIO(_) => 71,
             UnknownCommandByte(_) => 72,
+            Address(_) => 73,
         }
     }
 }
@@ -56,6 +59,7 @@ impl fmt::Display for Error {
             ),
             FileIO(io) => write!(f, "IO error {}", io),
             UnknownCommandByte(b) => write!(f, "Unknown command byte: 0x{:X}", b),
+            Address(a) => write!(f, "Address: 0x{:X} not supported", a),
         }
     }
 }

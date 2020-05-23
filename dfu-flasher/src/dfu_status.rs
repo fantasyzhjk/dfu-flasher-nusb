@@ -2,7 +2,7 @@ use crate::dfu_core::*;
 use crate::error::Error;
 use std::fmt;
 use usbapi::UsbCore;
-#[derive(Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum State {
     AppIdle,
     AppDetach,
@@ -77,7 +77,7 @@ impl fmt::Display for State {
         }
     }
 }
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct Status {
     pub status: u8,
     pub poll_timeout: usize,

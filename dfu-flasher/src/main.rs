@@ -5,10 +5,12 @@ mod error;
 use dfu_core::Dfu;
 use dfu_status::State;
 use dfuse_command::DfuseCommand;
+use env_logger;
 use error::Error;
-use std::fs::File;
+use std::fs::OpenOptions;
 use std::path::PathBuf;
 use structopt::StructOpt;
+use usbapi::UsbEnumerate;
 
 fn parse_int(src: &str) -> Result<u32, std::num::ParseIntError> {
     let src = src.replace("_", "");
@@ -18,23 +20,29 @@ fn parse_int(src: &str) -> Result<u32, std::num::ParseIntError> {
     src.parse()
 }
 
-fn parse_address_and_length(dfuse_address: &str) -> Result<(u32, u32), Error> {
+fn parse_address_and_length(dfuse_address: &str) -> Result<(u32, u32), std::num::ParseIntError> {
     let address;
     let length;
     let mut sp = dfuse_address.split(":");
     let a = sp.next().unwrap_or("0x0800_0000");
-    address = parse_int(a).map_err(|_| {
+    address = parse_int(a)?;
+
+    /*.map_err(|_| {
             Error::Argument(format!(
                 "Argument --dfuse-address expects address[:length] as Hex or decimal you passed '{}'.\nExample read/write 1024 bytes to address 0x80000000:\n--dfuse-address 0x0800_0000:1024",
                 dfuse_address
             ))
     })?;
-    length = parse_int(sp.next().unwrap_or("0")).map_err(|_| {
+        */
+    length = parse_int(sp.next().unwrap_or("0"))?;
+
+    /*.map_err(|_| {
             Error::Argument(format!(
                 "Argument --dfuse-address expects address[:length] as Hex or decimal you passed '{}'.\nExample read/write 1024 bytes to address 0x80000000:\n--dfuse-address 0x0800_0000:1024",
                 dfuse_address
             ))
     })?;
+    */
 
     Ok((address, length))
 }
@@ -90,11 +98,13 @@ struct Args {
     #[structopt(short, long)]
     bus_device: Option<String>,
     /// Address[:Length]
-    #[structopt(short = "s", long, default_value = "0x08000000")]
-    dfuse_address: String,
+    #[structopt(short = "s", long, default_value = "0x08000000", parse(try_from_str=parse_address_and_length))]
+    dfuse_address: (u32, u32),
     /// Erase all data on flash
     #[structopt(long)]
     mass_erase: bool,
+    #[structopt(long)]
+    erase_page: bool,
     #[structopt(short, long)]
     reset_stm32: bool,
     /// Specify the DFU interface
@@ -106,22 +116,18 @@ struct Args {
     /// Read firmware into <file>
     #[structopt(short = "U", long)]
     upload: Option<PathBuf>,
+    /// Write firmware <file> into flash
+    #[structopt(short = "D", long)]
+    download: Option<PathBuf>,
     #[structopt(skip)]
     bus: u8,
     #[structopt(skip)]
     device: u8,
-    #[structopt(skip)]
-    address: u32,
-    #[structopt(skip)]
-    length: u32,
 }
 
 impl Args {
     fn new() -> Result<Self, Error> {
         let mut args = Self::from_args();
-        let (a, l) = parse_address_and_length(&args.dfuse_address)?;
-        args.address = a;
-        args.length = l;
         if args.dev.is_some() && args.bus_device.is_some() {
             return Err(Error::Argument(
                 "Both vendor:product and bus:address cannot be specified at once!".into(),
@@ -141,7 +147,24 @@ impl Args {
                 return Err(Error::Argument("expect bus:device".into()));
             }
         } else {
-            return Err(Error::Argument("-b or -d must specified!".into()));
+            let mut e = UsbEnumerate::new();
+            e.enumerate()?;
+            let mut msg =
+                format!("Missing --bus-device or --dev! List of possible USB devices:\n\n");
+            for (bus, dev) in e
+                .devices()
+                .iter()
+                .filter(|(_, dev)| dev.device.id_product == 0xdf11)
+            {
+                let dev = &dev.device;
+                msg += &format!(
+                    "--bus-device {} or -d {:04X}:{:04X}\n",
+                    bus.replace("-", ":"),
+                    dev.id_vendor,
+                    dev.id_product,
+                );
+            }
+            return Err(Error::Argument(msg));
         }
 
         Ok(args)
@@ -175,15 +198,36 @@ fn run_main() -> Result<(), Error> {
     }
     dfu.status_wait_for(0, Some(State::DfuIdle))?;
     if let Some(file) = args.upload {
-        dfu.dfu_upload(&mut File::create(file)?, args.address, args.length)?;
+        dfu.upload(
+            &mut OpenOptions::new().write(true).create_new(true).open(file)?,
+            args.dfuse_address.0,
+            args.dfuse_address.1,
+        )?;
+    }
+
+    if let Some(file) = args.download {
+        let len = if args.dfuse_address.1 == 0 {
+            None
+        } else {
+            Some(args.dfuse_address.1)
+        };
+        dfu.download_raw(
+            &mut OpenOptions::new().read(true).open(file)?,
+            args.dfuse_address.0,
+            len,
+        )?;
+    }
+
+    if args.erase_page {
+        dfu.erase_pages(args.dfuse_address.0, args.dfuse_address.1)?;
     }
 
     if args.mass_erase {
-        dfu.dfuse_mass_erase()?;
+        dfu.mass_erase()?;
     }
 
     if args.reset_stm32 {
-        println!("reset stm {:X}", args.address);
+        println!("reset stm {:X}", args.dfuse_address.0);
         dfu.abort_to_idle()?;
         dfu.reset_stm32(0)?;
     }
@@ -192,8 +236,10 @@ fn run_main() -> Result<(), Error> {
 }
 
 fn main() {
+    let env = env_logger::Env::default().filter_or("DFU_FLASHER_LOG", "info");
+    env_logger::init_from_env(env);
     if let Err(err) = run_main() {
-        eprintln!("{}", err);
+        log::error!("{}", err);
         std::process::exit(i32::from(err));
     }
 }
