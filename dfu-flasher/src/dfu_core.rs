@@ -34,13 +34,13 @@ impl Drop for Dfu {
     }
 }
 impl Dfu {
-    pub fn from_bus_address(bus: u8, address: u8) -> Result<Self, Error> {
+    pub fn from_bus_address(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
         let mut usb =
             UsbCore::from_bus_address(bus, address).map_err(|e| Error::USB("open".into(), e))?;
-        usb.claim_interface(0).unwrap_or_else(|e| {
+        usb.claim_interface(iface).unwrap_or_else(|e| {
             eprintln!("Claim interface failed with {}", e);
         });
-        usb.set_interface(0, 0).unwrap_or_else(|e| {
+        usb.set_interface(iface, alt).unwrap_or_else(|e| {
             eprintln!("Set interface failed with {}", e);
         });
         println!("{}", usb.get_descriptor_string_iface(6, 3));
@@ -184,7 +184,7 @@ impl Dfu {
         &mut self,
         file: &mut File,
         address: u32,
-        mut length: u16,
+        mut length: u32,
     ) -> Result<(), Error> {
         self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
         self.status_wait_for(0, None)?;

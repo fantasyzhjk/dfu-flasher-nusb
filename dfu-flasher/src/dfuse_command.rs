@@ -70,27 +70,19 @@ mod tests {
     #[test]
     fn test_dfuse_command() {
         let vec = Vec::from(DfuseCommand::MassErase);
-        assert!(true, vec.len() == 1);
-        assert!(true, vec[0] == 0x41);
+        assert_eq!(1, vec.len());
+        assert_eq!(&vec![0x41], &vec);
 
         let vec = Vec::from(DfuseCommand::ReadUnprotected);
-        assert!(true, vec.len() == 1);
-        assert!(true, vec[0] == 0x92);
+        assert_eq!(1, vec.len());
+        assert_eq!(&vec![0x92], &vec);
 
-        let vec = Vec::from(DfuseCommand::SetAddress(0x08100000));
-        assert!(true, vec.len() == 5);
-        assert!(true, vec[0] == 0x21);
-        assert!(true, vec[1] == 0x00);
-        assert!(true, vec[2] == 0x00);
-        assert!(true, vec[3] == 0x01);
-        assert!(true, vec[4] == 0x08);
+        let vec = Vec::from(DfuseCommand::SetAddress(0x0801_0000));
+        assert_eq!(5, vec.len());
+        assert_eq!(&vec![0x21, 0x00, 0x00, 0x01, 0x08], &vec);
 
-        let vec = Vec::from(DfuseCommand::ErasePage(0x08100200));
-        assert!(true, vec.len() == 5);
-        assert!(true, vec[0] == 0x41);
-        assert!(true, vec[1] == 0x00);
-        assert!(true, vec[2] == 0x02);
-        assert!(true, vec[3] == 0x01);
-        assert!(true, vec[4] == 0x08);
+        let vec = Vec::from(DfuseCommand::ErasePage(0x0801_0200));
+        assert_eq!(5, vec.len());
+        assert_eq!(&vec![0x41, 0x00, 0x02, 0x01, 0x08], &vec);
     }
 }
