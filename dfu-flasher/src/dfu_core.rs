@@ -143,12 +143,12 @@ impl Dfu {
         let mut usb =
             UsbCore::from_bus_address(bus, address).map_err(|e| Error::USB("open".into(), e))?;
         usb.claim_interface(iface).unwrap_or_else(|e| {
-            eprintln!("Claim interface failed with {}", e);
+            log::warn!("Claim interface failed with {}", e);
         });
         usb.set_interface(iface, alt).unwrap_or_else(|e| {
-            eprintln!("Set interface failed with {}", e);
+            log::warn!("Set interface failed with {}", e);
         });
-        println!("{}", usb.get_descriptor_string_iface(6, 3));
+        log::debug!("Product: {}", usb.get_descriptor_string_iface(0, 3));
         let timeout = 3000;
         Ok(Self {
             usb,
@@ -168,13 +168,13 @@ impl Dfu {
                 if let Error::USBNix(_, e) = e {
                     if let nix::Error::Sys(e) = e {
                         if *e == nix::errno::Errno::EPIPE {
-                            eprintln!("Epipe try again");
+                            log::warn!("Epipe try again");
                             std::thread::sleep(std::time::Duration::from_millis(3000));
                             continue;
                         }
                     }
                 } else if let Error::InvalidControlResponse(_) = e {
-                    eprintln!("Invalid control response");
+                    log::warn!("Invalid control response");
                     std::thread::sleep(std::time::Duration::from_millis(3000));
                     continue;
                 }
@@ -246,7 +246,6 @@ impl Dfu {
             return Err(Error::InvalidState(s, wait_for_state.clone()));
         }
 
-        //println!("Ready:\n{}", s);
         if s.status != 0 {
             return Err(Error::InvalidStatus(s, 0));
         }
@@ -457,7 +456,7 @@ impl Dfu {
         );
         match self.usb.control(ctl.clone()) {
             Err(nix::Error::Sys(e)) if e == nix::errno::Errno::EPIPE => {
-                eprintln!("stalled on {:X?}", ctl);
+                log::warn!("stalled on {:X?}", ctl);
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 Ok(())
             }
