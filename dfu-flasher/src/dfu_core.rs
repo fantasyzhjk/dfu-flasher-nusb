@@ -68,6 +68,53 @@ mod tests {
     }
 }
 
+#[derive(Debug)]
+struct Transaction {
+    transaction: u16,
+    address: u32,
+    pending: u32,
+    xfer: u16,
+    xfer_max: u16,
+}
+
+impl Transaction {
+    fn new(address: u32, pending: u32, xfer_max: u16) -> Self {
+        let mut t = Transaction {
+            transaction: 2,
+            address,
+            pending,
+            xfer: xfer_max,
+            xfer_max,
+        };
+        t.set_xfer();
+        t
+    }
+
+    fn set_xfer(&mut self) {
+        if self.pending >= self.xfer_max as u32 {
+            self.xfer = self.xfer_max;
+            self.pending -= self.xfer_max as u32;
+        } else {
+            self.xfer = (self.pending % self.xfer_max as u32) as u16;
+            self.pending = 0;
+        }
+    }
+}
+
+impl Iterator for Transaction {
+    type Item = ();
+    fn next(&mut self) -> Option<()> {
+        if self.pending == 0 {
+            self.xfer = 0;
+            return None;
+        }
+        self.set_xfer();
+        self.address += self.xfer as u32;
+        self.transaction += 1;
+        Some(())
+    }
+}
+
 pub(crate) struct Dfu {
     usb: UsbCore,
     timeout: u32,
@@ -77,10 +124,16 @@ pub(crate) struct Dfu {
 
 impl Drop for Dfu {
     fn drop(&mut self) {
+        if let Err(_) = self.status_wait_for(0, Some(State::DfuIdle)) {
+            log::debug!("Dfu was not idle abort to idle");
+            self.abort_to_idle().unwrap_or_else(|e| {
+                log::error!("Abort to idle failed {}", e);
+            });
+        }
         self.usb
             .release_interface(self.interface as u32)
             .unwrap_or_else(|e| {
-                eprintln!("Release interface failed with {}", e);
+                log::error!("Release interface failed with {}", e);
             });
     }
 }
@@ -205,10 +258,12 @@ impl Dfu {
         self.status_wait_for(0, Some(State::DfuDownloadIdle))
     }
 
-    pub fn reset_stm32(&mut self, address: u32) -> Result<Status, Error> {
+    pub fn reset_stm32(&mut self, address: u32) -> Result<(), Error> {
+        self.abort_to_idle()?;
         self.set_address(address)?;
         self.dfuse_download(None, 2)?;
-        self.get_status(100)
+        self.get_status(100)?;
+        Ok(())
     }
 
     pub fn dfuse_get_commands(&mut self) -> Result<Vec<DfuseCommand>, Error> {
@@ -229,15 +284,45 @@ impl Dfu {
         Ok(v)
     }
 
-    pub fn erase_pages(&mut self, mut address: u32, mut length: u32) -> Result<(), Error> {
-        let pages = calculate_pages(address, length)?;
-        self.dfuse_erase_pages(address, pages)?;
-
+    pub fn verify(
+        &mut self,
+        file: &mut File,
+        address: u32,
+        length: Option<u32>,
+    ) -> Result<(), Error> {
+        let length = Self::get_length_from_file(file, length)?;
+        self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+        self.status_wait_for(0, None)?;
+        self.abort_to_idle()?;
+        self.status_wait_for(0, Some(State::DfuIdle))?;
+        let mut t = Transaction::new(address, length, self.xfer_size);
+        while t.xfer > 0 {
+            let address = t.address;
+            self.flash_read_next(&mut t, |v| {
+                let mut r = vec![0; v.len()];
+                file.read(&mut r)?;
+                let mut i2 = v.iter();
+                for (i, byte) in r.iter().enumerate() {
+                    if let Some(byte2) = i2.next() {
+                        if byte == byte2 {
+                            continue;
+                        }
+                    }
+                    return Err(Error::Verify(address + i as u32));
+                }
+                if v.len() != r.len() {
+                    return Err(Error::Verify(address + v.len() as u32));
+                }
+                Ok(())
+            })?;
+        }
+        self.abort_to_idle()?;
         Ok(())
     }
 
-    fn dfuse_erase_pages(&mut self, mut address: u32, mut pages: u16) -> Result<(), Error> {
+    pub fn erase_pages(&mut self, mut address: u32, mut length: u32) -> Result<(), Error> {
         self.status_wait_for(0, Some(State::DfuIdle))?;
+        let mut pages = calculate_pages(address, length)?;
         while pages > 0 {
             self.dfuse_download(Some(Vec::from(DfuseCommand::ErasePage(address))), 0)?;
             self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
@@ -255,25 +340,28 @@ impl Dfu {
         Ok(())
     }
 
-    pub fn upload(&mut self, file: &mut File, address: u32, mut length: u32) -> Result<(), Error> {
+    fn flash_read_next<F>(&mut self, t: &mut Transaction, mut f: F) -> Result<(), Error>
+    where
+        F: FnMut(Vec<u8>) -> Result<(), Error>,
+    {
+        log::info!("{:X?}", t);
+        let v = self.dfuse_upload(t.transaction, t.xfer)?;
+        f(v)?;
+        let _ = t.next().is_some();
+        Ok(())
+    }
+
+    /// Upload writes &file to flash.
+    pub fn upload(&mut self, file: &mut File, address: u32, length: u32) -> Result<(), Error> {
         self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
-        self.status_wait_for(0, None)?;
-        let mut transfer = 2;
-        let mut xfer;
-        while length != 0 {
-            if length >= self.xfer_size as u32 {
-                xfer = self.xfer_size;
-                length -= self.xfer_size as u32;
-            } else {
-                xfer = (length % self.xfer_size as u32) as u16;
-                length = 0;
-            }
-            let v = self.dfuse_upload(transfer, xfer)?;
-            file.write_all(&v)?;
-            transfer += 1;
+        self.status_wait_for(0, Some(State::DfuIdle))?;
+        let mut t = Transaction::new(address, length, self.xfer_size);
+        while t.xfer > 0 {
+            self.flash_read_next(&mut t, |v| Ok(file.write_all(&v)?))?;
         }
+        self.abort_to_idle()?;
         Ok(())
     }
 
@@ -297,16 +385,9 @@ impl Dfu {
         Ok(())
     }
 
-    /// Download file to device using raw mode.
-    /// If length is None it will read to file end.
-    pub fn download_raw(
-        &mut self,
-        file: &mut File,
-        address: u32,
-        length: Option<u32>,
-    ) -> Result<(), Error> {
+    fn get_length_from_file(file: &File, length: Option<u32>) -> Result<u32, Error> {
         let file_length = file.metadata()?.len() as u32;
-        let mut length = match length {
+        Ok(match length {
             Some(length) => {
                 if file_length < length {
                     return Err(Error::Argument(format!(
@@ -322,7 +403,18 @@ impl Dfu {
                 }
                 file_length
             }
-        };
+        })
+    }
+
+    /// Download file to device using raw mode.
+    /// If length is None it will read to file end.
+    pub fn download_raw(
+        &mut self,
+        file: &mut File,
+        address: u32,
+        length: Option<u32>,
+    ) -> Result<(), Error> {
+        let mut length = Self::get_length_from_file(file, length)?;
         self.erase_pages(address, length)?;
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
@@ -349,6 +441,7 @@ impl Dfu {
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
             transaction += 1;
         }
+        self.abort_to_idle()?;
         Ok(())
     }
 

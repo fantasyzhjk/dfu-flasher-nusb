@@ -12,6 +12,7 @@ pub enum Error {
     FileIO(std::io::Error),
     UnknownCommandByte(u8),
     Address(u32),
+    Verify(u32),
 }
 
 impl From<std::io::Error> for Error {
@@ -34,6 +35,7 @@ impl From<Error> for i32 {
             FileIO(_) => 71,
             UnknownCommandByte(_) => 72,
             Address(_) => 73,
+            Verify(_) => 74,
         }
     }
 }
@@ -60,6 +62,7 @@ impl fmt::Display for Error {
             FileIO(io) => write!(f, "IO error {}", io),
             UnknownCommandByte(b) => write!(f, "Unknown command byte: 0x{:X}", b),
             Address(a) => write!(f, "Address: 0x{:X} not supported", a),
+            Verify(a) => write!(f, "Verify failed at address: 0x{:04X}", a),
         }
     }
 }

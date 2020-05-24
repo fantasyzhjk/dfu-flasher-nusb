@@ -7,6 +7,7 @@ use dfu_status::State;
 use dfuse_command::DfuseCommand;
 use env_logger;
 use error::Error;
+use std::fmt;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -20,31 +21,37 @@ fn parse_int(src: &str) -> Result<u32, std::num::ParseIntError> {
     src.parse()
 }
 
-fn parse_address_and_length(dfuse_address: &str) -> Result<(u32, u32), std::num::ParseIntError> {
+fn parse_address_and_length_as_some(
+    dfuse_address: &str,
+) -> Result<(u32, Option<u32>), std::num::ParseIntError> {
+    let address;
+    let mut sp = dfuse_address.split(":");
+    let a = sp.next().unwrap_or("0x0800_0000");
+    address = parse_int(a)?;
+    let mut length = if let Some(s) = sp.next() {
+        Some(parse_int(&s)?)
+    } else {
+        None
+    };
+    Ok((address, length))
+}
+
+fn parse_address_and_length(address: &str) -> Result<(u32, u32), std::num::ParseIntError> {
+    let a = parse_address_and_length_as_some(address)?;
+    Ok((a.0, a.1.unwrap_or(0)))
+}
+
+fn parse_address_and_pages(dfuse_address: &str) -> Result<(u32, u8), std::num::ParseIntError> {
     let address;
     let length;
     let mut sp = dfuse_address.split(":");
     let a = sp.next().unwrap_or("0x0800_0000");
     address = parse_int(a)?;
-
-    /*.map_err(|_| {
-            Error::Argument(format!(
-                "Argument --dfuse-address expects address[:length] as Hex or decimal you passed '{}'.\nExample read/write 1024 bytes to address 0x80000000:\n--dfuse-address 0x0800_0000:1024",
-                dfuse_address
-            ))
-    })?;
-        */
     length = parse_int(sp.next().unwrap_or("0"))?;
-
-    /*.map_err(|_| {
-            Error::Argument(format!(
-                "Argument --dfuse-address expects address[:length] as Hex or decimal you passed '{}'.\nExample read/write 1024 bytes to address 0x80000000:\n--dfuse-address 0x0800_0000:1024",
-                dfuse_address
-            ))
-    })?;
-    */
-
-    Ok((address, length))
+    if length > 255 {
+        panic!("Pages must be less than 256")
+    }
+    Ok((address, length as u8))
 }
 
 mod tests {
@@ -84,6 +91,112 @@ mod tests {
             parse_address_and_length("0xZZ00_0000:0x1000").is_err()
         );
     }
+    #[test]
+    fn test_parse_address_and_length_as_some() {
+        use crate::*;
+        assert_eq!(
+            true,
+            parse_address_and_length_as_some("0xFF00_0000")
+                .map(|(a, l)| {
+                    assert_eq!(0xFF00_0000, a);
+                    assert_eq!(None, l);
+                })
+                .is_ok()
+        );
+        assert_eq!(
+            true,
+            parse_address_and_length_as_some("0xFF00_0000:1024")
+                .map(|(a, l)| {
+                    assert_eq!(0xFF00_0000, a);
+                    assert_eq!(Some(1024), l);
+                })
+                .is_ok()
+        );
+        assert_eq!(true, parse_address_and_length("0xFF00_0000:0x1000").is_ok());
+        assert_eq!(
+            true,
+            parse_address_and_length("0xZZ00_0000:0x1000").is_err()
+        );
+    }
+}
+
+#[derive(StructOpt, PartialEq)]
+struct STMResetArgs {
+    #[structopt(short = "s", long, default_value = "0x08000000", parse(try_from_str=parse_int))]
+    address: u32,
+}
+
+#[derive(StructOpt, PartialEq)]
+struct EraseArgs {
+    /// start_address:num_pages
+    #[structopt(short = "s", long, parse(try_from_str=parse_address_and_length))]
+    address: (u32, u32),
+}
+
+#[derive(StructOpt, PartialEq)]
+struct VWFlashArgs {
+    /// start address[:length]
+    #[structopt(short = "s", long, default_value = "0x08000000", parse(try_from_str=parse_address_and_length_as_some))]
+    address: (u32, Option<u32>),
+    /// Read firmware into <file>
+    #[structopt(short = "f", long)]
+    file_name: PathBuf,
+}
+
+#[derive(StructOpt, PartialEq)]
+struct ReadFlashArgs {
+    /// start address[:length]
+    #[structopt(short = "s", long, default_value = "0x08000000", parse(try_from_str=parse_address_and_length))]
+    address: (u32, u32),
+    /// Read firmware into <file>
+    #[structopt(short = "f", long)]
+    file_name: PathBuf,
+    #[structopt(short = "F", long)]
+    overwrite: bool,
+}
+
+#[derive(StructOpt, PartialEq)]
+enum Action {
+    SupportedCommands,
+    Reset(STMResetArgs),
+    EraseAll,
+    Erase(EraseArgs),
+    Read(ReadFlashArgs),
+    Write(VWFlashArgs),
+    Verify(VWFlashArgs),
+    Detach,
+}
+
+impl fmt::Display for Action {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use crate::Action::*;
+        match self {
+            SupportedCommands => write!(f, "List supported commands"),
+            Reset(a) => write!(f, "Reset STM32 vector start address: 0x{:04X}", a.address),
+            EraseAll => write!(f, "Erase all"),
+            Erase(a) => write!(
+                f,
+                "Erase area start address: 0x{:04X} number of pages: {}.",
+                a.address.0, a.address.1
+            ),
+            Read(a) => write!(
+                f,
+                "Read flash from start address: 0x{:04X} length: {} bytes and save to file: '{:?}'",
+                a.address.0, a.address.1, a.file_name
+            ),
+            Write(a) => write!(
+                f,
+                "Write file: '{:?}' to flash at start address: 0x{:04X} length: {:?} bytes.",
+                a.file_name, a.address.0, a.address.1
+            ),
+            Verify(a) => write!(
+                f,
+                "Read flash from start address: 0x{:04X} length: {:?} bytes and verify using file '{:?}'",
+                a.address.0, a.address.1, a.file_name
+            ),
+            Detach => write!(f, "Detach"),
+        }
+    }
 }
 
 #[derive(StructOpt)]
@@ -97,32 +210,19 @@ struct Args {
     id_product: u16,
     #[structopt(short, long)]
     bus_device: Option<String>,
-    /// Address[:Length]
-    #[structopt(short = "s", long, default_value = "0x08000000", parse(try_from_str=parse_address_and_length))]
-    dfuse_address: (u32, u32),
-    /// Erase all data on flash
-    #[structopt(long)]
-    mass_erase: bool,
-    #[structopt(long)]
-    erase_page: bool,
-    #[structopt(short, long)]
-    reset_stm32: bool,
     /// Specify the DFU interface
     #[structopt(short, long, default_value = "0")]
     intf: u32,
     /// Specify Alt setting of the DFU interface by number
     #[structopt(short, long, default_value = "0")]
     alt: u32,
-    /// Read firmware into <file>
-    #[structopt(short = "U", long)]
-    upload: Option<PathBuf>,
-    /// Write firmware <file> into flash
-    #[structopt(short = "D", long)]
-    download: Option<PathBuf>,
     #[structopt(skip)]
     bus: u8,
     #[structopt(skip)]
     device: u8,
+
+    #[structopt(subcommand)]
+    action: Action,
 }
 
 impl Args {
@@ -173,70 +273,48 @@ impl Args {
 
 fn run_main() -> Result<(), Error> {
     let args = Args::new()?;
-    /*
-    let mut e = UsbEnumerate::new();
-    e.enumerate()
-        .map_err(|e| Error::USB("enumerate".into(), e))?;
-    let mut dev = e.devices().iter().filter(|(_bus, d)| {
-        if d.device.id_product == args.id_product {
-            return true;
-        }
-        false
-    });
-    let (_bus, dev) = dev
-        .next()
-        .ok_or_else(|| Error::DeviceNotFound(args.device.clone()))?;
-    */
-    println!("{}:{}", args.bus, args.device);
     let mut dfu = Dfu::from_bus_address(args.bus, args.device, args.intf, args.alt)?;
-    println!("{}", dfu.get_status(0)?);
-    let supported_cmds = dfu.dfuse_get_commands()?;
     dfu.status_wait_for(0, Some(State::DfuIdle))?;
-    println!("Supported commands:");
-    for cmd in supported_cmds {
-        println!("{}", cmd);
-    }
-    dfu.status_wait_for(0, Some(State::DfuIdle))?;
-    if let Some(file) = args.upload {
-        dfu.upload(
-            &mut OpenOptions::new().write(true).create_new(true).open(file)?,
-            args.dfuse_address.0,
-            args.dfuse_address.1,
-        )?;
-    }
+    log::info!("Execute action: {}", args.action);
+    match args.action {
+        Action::SupportedCommands => {
+            let supported_cmds = dfu.dfuse_get_commands()?;
+            println!("Supported commands:");
+            for cmd in supported_cmds {
+                println!("{}", cmd);
+            }
+            Ok(())
+        }
+        Action::Reset(a) => dfu.reset_stm32(a.address),
+        Action::Read(a) => dfu.upload(
+            &mut OpenOptions::new()
+                .write(true)
+                .create(a.overwrite)
+                .truncate(a.overwrite)
+                .create_new(!a.overwrite)
+                .open(a.file_name)?,
+            a.address.0,
+            a.address.1,
+        ),
+        Action::Write(a) => dfu.download_raw(
+            &mut OpenOptions::new().read(true).open(a.file_name)?,
+            a.address.0,
+            a.address.1,
+        ),
 
-    if let Some(file) = args.download {
-        let len = if args.dfuse_address.1 == 0 {
-            None
-        } else {
-            Some(args.dfuse_address.1)
-        };
-        dfu.download_raw(
-            &mut OpenOptions::new().read(true).open(file)?,
-            args.dfuse_address.0,
-            len,
-        )?;
+        Action::Verify(a) => dfu.verify(
+            &mut OpenOptions::new().read(true).open(a.file_name)?,
+            a.address.0,
+            a.address.1,
+        ),
+        Action::EraseAll => dfu.mass_erase(),
+        Action::Erase(a) => dfu.erase_pages(a.address.0, a.address.1),
+        Action::Detach => dfu.detach(),
     }
-
-    if args.erase_page {
-        dfu.erase_pages(args.dfuse_address.0, args.dfuse_address.1)?;
-    }
-
-    if args.mass_erase {
-        dfu.mass_erase()?;
-    }
-
-    if args.reset_stm32 {
-        println!("reset stm {:X}", args.dfuse_address.0);
-        dfu.abort_to_idle()?;
-        dfu.reset_stm32(0)?;
-    }
-
-    Ok(())
 }
 
 fn main() {
-    let env = env_logger::Env::default().filter_or("DFU_FLASHER_LOG", "info");
+    let env = env_logger::Env::default().filter_or("DFU_FLASHER_LOG", "debug");
     env_logger::init_from_env(env);
     if let Err(err) = run_main() {
         log::error!("{}", err);
