@@ -157,7 +157,7 @@ impl From<(UsbCore, u32, u32)> for Dfu {
 }
 
 impl Dfu {
-    pub fn from_bus_address(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
+    pub fn from_bus_device(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
         let mut usb =
             UsbCore::from_bus_address(bus, address).map_err(|e| Error::USB("open".into(), e))?;
         Ok(Dfu::from((usb, iface, alt)))

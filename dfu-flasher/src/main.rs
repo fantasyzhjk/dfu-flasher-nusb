@@ -269,7 +269,7 @@ impl Args {
 
 fn run_main() -> Result<(), Error> {
     let args = Args::new()?;
-    let mut dfu = Dfu::from_bus_address(args.bus, args.device, args.intf, args.alt)?;
+    let mut dfu = Dfu::from_bus_device(args.bus, args.device, args.intf, args.alt)?;
     dfu.status_wait_for(0, Some(State::DfuIdle))?;
     log::info!("Execute action: {}", args.action);
     match args.action {
