@@ -137,10 +137,8 @@ impl Drop for Dfu {
     }
 }
 
-impl Dfu {
-    pub fn from_bus_address(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
-        let mut usb =
-            UsbCore::from_bus_address(bus, address).map_err(|e| Error::USB("open".into(), e))?;
+impl From<(UsbCore, u32, u32)> for Dfu {
+    fn from((mut usb, iface, alt): (UsbCore, u32, u32)) -> Self {
         usb.claim_interface(iface).unwrap_or_else(|e| {
             log::warn!("Claim interface failed with {}", e);
         });
@@ -149,12 +147,20 @@ impl Dfu {
         });
         log::debug!("Product: {}", usb.get_descriptor_string_iface(0, 3));
         let timeout = 3000;
-        Ok(Self {
+        Self {
             usb,
             timeout,
             interface: 0,
             xfer_size: 1024,
-        })
+        }
+    }
+}
+
+impl Dfu {
+    pub fn from_bus_address(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
+        let mut usb =
+            UsbCore::from_bus_address(bus, address).map_err(|e| Error::USB("open".into(), e))?;
+        Ok(Dfu::from((usb, iface, alt)))
     }
 
     pub fn get_status(&mut self, mut retries: u8) -> Result<Status, Error> {
