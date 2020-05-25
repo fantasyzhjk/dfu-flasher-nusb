@@ -1,2 +1,2 @@
 [workspace]
-members = ["dfu-flasher"]
+members = ["dfu-flasher", "dfu"]

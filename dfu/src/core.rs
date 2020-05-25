@@ -1,10 +1,9 @@
-use crate::dfu_status::{State, Status};
 use crate::dfuse_command::DfuseCommand;
 use crate::error::Error;
+use crate::status::{State, Status};
 use log::info;
 use std::convert::TryFrom;
 use std::fs::File;
-use std::io::prelude::*;
 use std::io::{Read, Write};
 use usbapi::UsbCore;
 #[allow(dead_code)]
@@ -115,7 +114,7 @@ impl Iterator for Transaction {
     }
 }
 
-pub(crate) struct Dfu {
+pub struct Dfu {
     usb: UsbCore,
     timeout: u32,
     interface: u16,
@@ -173,13 +172,15 @@ impl Dfu {
                             continue;
                         }
                     }
-                } else if let Error::InvalidControlResponse(_) = e {
-                    log::warn!("Invalid control response");
-                    std::thread::sleep(std::time::Duration::from_millis(3000));
+                } else if let Error::InvalidControlResponse(e) = e {
+                    log::warn!("retries {} Get status error cause '{}'", retries, e);
+                    std::thread::sleep(std::time::Duration::from_millis(100));
                     continue;
                 }
+            } else {
+                println!("out retries {}", retries);
+                retries = 0;
             }
-            retries = 0;
         }
         status
     }
@@ -335,7 +336,8 @@ impl Dfu {
     pub fn mass_erase(&mut self) -> Result<(), Error> {
         self.status_wait_for(0, Some(State::DfuIdle))?;
         self.dfuse_download(Some(Vec::from(DfuseCommand::MassErase)), 0)?;
-        self.status_wait_for(0, Some(State::DfuIdle))?;
+        self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
+        self.status_wait_for(10, Some(State::DfuDownloadIdle))?;
         Ok(())
     }
 

@@ -1,4 +1,4 @@
-use crate::dfu_core::*;
+use crate::core::*;
 use crate::error::Error;
 use std::fmt;
 use usbapi::UsbCore;

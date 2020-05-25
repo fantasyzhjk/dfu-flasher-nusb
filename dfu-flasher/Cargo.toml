@@ -5,6 +5,7 @@ authors = ["mikael <mike7b4@protonmail.com>"]
 edition = "2018"
 
 [dependencies]
+dfu = { path = "../dfu"}
 log = ""
 structopt = "0.3"
 nix = ""

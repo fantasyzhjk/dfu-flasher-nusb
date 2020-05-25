@@ -1,0 +1,11 @@
+[package]
+name = "dfu"
+version = "0.1.0"
+authors = ["mikael <mike7b4@protonmail.com>"]
+edition = "2018"
+
+[dependencies]
+log = ""
+nix = ""
+usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
+

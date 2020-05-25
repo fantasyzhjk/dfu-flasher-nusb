@@ -1,12 +1,8 @@
-mod dfu_core;
-mod dfu_status;
-mod dfuse_command;
-mod error;
-use dfu_core::Dfu;
-use dfu_status::State;
-use dfuse_command::DfuseCommand;
+use dfu::core::Dfu;
+use dfu::dfuse_command::DfuseCommand;
+use dfu::error::Error;
+use dfu::status::State;
 use env_logger;
-use error::Error;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::path::PathBuf;

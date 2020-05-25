@@ -1,4 +1,4 @@
-use crate::dfu_status::{State, Status};
+use crate::status::{State, Status};
 use std::fmt;
 #[derive(Debug)]
 pub enum Error {
