@@ -1,7 +1,6 @@
 use crate::dfuse_command::DfuseCommand;
 use crate::error::Error;
 use crate::status::{State, Status};
-use log::info;
 use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -380,7 +379,7 @@ impl Dfu {
     where
         F: FnMut(Vec<u8>) -> Result<(), Error>,
     {
-        log::info!("{:X?}", t);
+        log::debug!("{:X?}", t);
         let v = self.dfuse_upload(t.transaction, t.xfer)?;
         f(v)?;
         let _ = t.next().is_some();
@@ -464,9 +463,12 @@ impl Dfu {
                 xfer = length as u16;
                 length = 0;
             }
-            info!(
+            log::debug!(
                 "{}: 0x{:4X} xfer: {} length: {}",
-                transaction, address, xfer, length
+                transaction,
+                address,
+                xfer,
+                length
             );
             let mut buf = vec![0; xfer as usize];
             file.read(&mut buf)?;
