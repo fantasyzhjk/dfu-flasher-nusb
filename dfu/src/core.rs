@@ -119,10 +119,14 @@ pub struct Dfu {
     timeout: u32,
     interface: u16,
     xfer_size: u16,
+    detached: bool,
 }
 
 impl Drop for Dfu {
     fn drop(&mut self) {
+        if self.detached {
+            return;
+        }
         if let Err(_) = self.status_wait_for(0, Some(State::DfuIdle)) {
             log::debug!("Dfu was not idle abort to idle");
             self.abort_to_idle().unwrap_or_else(|e| {
@@ -152,6 +156,7 @@ impl From<(UsbCore, u32, u32)> for Dfu {
             timeout,
             interface: 0,
             xfer_size: 1024,
+            detached: false,
         }
     }
 }
@@ -259,16 +264,25 @@ impl Dfu {
         Ok(s)
     }
 
-    pub fn set_address(&mut self, address: u32) -> Result<Status, Error> {
+    pub fn set_address(&mut self, address: u32) -> Result<(), Error> {
         self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
-        self.status_wait_for(0, Some(State::DfuDownloadIdle))
+        self.status_wait_for(0, Some(State::DfuDownloadIdle))?;
+        Ok(())
     }
 
     pub fn reset_stm32(&mut self, address: u32) -> Result<(), Error> {
-        self.abort_to_idle()?;
+        //self.abort_to_idle()?;
         self.set_address(address)?;
+        log::debug!("set done");
+        //        self.abort_to_idle()?;
+        //       log::debug!("abort done");
         self.dfuse_download(None, 2)?;
-        self.get_status(100)?;
+        log::debug!("dfuse None, 2 done");
+        self.get_status(0).unwrap_or_else(|e| {
+            log::warn!("get_status failed");
+            Status::default()
+        });
+        self.detached = true;
         Ok(())
     }
 

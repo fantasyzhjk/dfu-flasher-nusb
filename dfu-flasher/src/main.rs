@@ -161,6 +161,7 @@ enum Action {
     Write(VWFlashArgs),
     Verify(VWFlashArgs),
     Detach,
+    SetAddress(STMResetArgs),
 }
 
 impl fmt::Display for Action {
@@ -190,6 +191,7 @@ impl fmt::Display for Action {
                 "Read flash from start address: 0x{:04X} length: {:?} bytes and verify using file '{:?}'",
                 a.address.0, a.address.1, a.file_name
             ),
+            SetAddress(a) => write!(f, "Set address 0x{:04X}", a.address),
             Detach => write!(f, "Detach"),
         }
     }
@@ -306,6 +308,7 @@ fn run_main() -> Result<(), Error> {
         Action::EraseAll => dfu.mass_erase(),
         Action::Erase(a) => dfu.erase_pages(a.address.0, a.address.1),
         Action::Detach => dfu.detach(),
+        Action::SetAddress(a) => dfu.set_address(a.address),
     }
 }
 
