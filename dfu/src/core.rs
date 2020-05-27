@@ -126,13 +126,13 @@ impl Drop for Dfu {
         if let Err(_) = self.status_wait_for(0, Some(State::DfuIdle)) {
             log::debug!("Dfu was not idle abort to idle");
             self.abort_to_idle().unwrap_or_else(|e| {
-                log::error!("Abort to idle failed {}", e);
+                log::warn!("Abort to idle failed {}", e);
             });
         }
         self.usb
             .release_interface(self.interface as u32)
             .unwrap_or_else(|e| {
-                log::error!("Release interface failed with {}", e);
+                log::warn!("Release interface failed with {}", e);
             });
     }
 }
