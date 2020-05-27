@@ -19,7 +19,9 @@ const DFU_GETSTATE: u8 = 5;
 const DFU_ABORT: u8 = 6;
 
 /// 64k STM32F205 page size hardcoded for now FIXME FIXME FIXME
-const PAGE_SIZE: u32 = 0x10000;
+const PAGE_SIZE16: u32 = 0x4000;
+//const PAGE_SIZE32: u32 = 0x8000;
+const PAGE_SIZE64: u32 = 0x10000;
 
 fn calculate_pages(address: u32, length: u32) -> Result<u16, Error> {
     // FIXME this should not be hardcoded depending on pages size on STM32 this differs.
@@ -27,9 +29,12 @@ fn calculate_pages(address: u32, length: u32) -> Result<u16, Error> {
         return Err(Error::Argument("Length must be > 0".into()));
     }
     let pages;
-    if address >= 0x0801_0000 && address <= 0x0801_FFFE {
-        pages =
-            (((length / PAGE_SIZE) as f32).ceil() as u16 + ((length % 0x10000) != 0) as u16) as u16;
+    if address >= 0x0800_0000 && address <= 0x0800_FFFE {
+        pages = (((length / PAGE_SIZE16) as f32).ceil() as u16
+            + ((length % PAGE_SIZE16) != 0) as u16) as u16;
+    } else if address >= 0x0801_0000 && address <= 0x0801_FFFE {
+        pages = (((length / PAGE_SIZE64) as f32).ceil() as u16
+            + ((length % PAGE_SIZE64) != 0) as u16) as u16;
     } else {
         return Err(Error::Address(address));
     }
@@ -39,7 +44,13 @@ fn calculate_pages(address: u32, length: u32) -> Result<u16, Error> {
 mod tests {
     #[test]
     fn test_calculate_pages() {
-        use crate::dfu_core::*;
+        use crate::core::calculate_pages;
+        assert_eq!(
+            true,
+            calculate_pages(0x0800_0000, 0x8000)
+                .map(|pages| { assert_eq!(2, pages) })
+                .is_ok()
+        );
         assert_eq!(
             true,
             calculate_pages(0x0801_0000, 3)
@@ -348,7 +359,11 @@ impl Dfu {
             self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
             pages -= 1;
-            address += PAGE_SIZE;
+            if address < 0x08010000 {
+                address += PAGE_SIZE16;
+            } else {
+                address += PAGE_SIZE64;
+            }
         }
         Ok(())
     }
