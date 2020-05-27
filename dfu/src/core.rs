@@ -199,7 +199,6 @@ impl Dfu {
                     continue;
                 }
             } else {
-                println!("out retries {}", retries);
                 retries = 0;
             }
         }
