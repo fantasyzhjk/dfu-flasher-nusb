@@ -1,9 +1,11 @@
 use crate::dfuse_command::DfuseCommand;
 use crate::error::Error;
+use crate::memory_layout::MemoryLayout;
 use crate::status::{State, Status};
 use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::str::FromStr;
 use usbapi::UsbCore;
 #[allow(dead_code)]
 const DFU_DETACH: u8 = 0;
@@ -174,7 +176,7 @@ impl From<(UsbCore, u32, u32)> for Dfu {
 impl Dfu {
     pub fn from_bus_device(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
         let mut usb =
-            UsbCore::from_bus_address(bus, address).map_err(|e| Error::USB("open".into(), e))?;
+            UsbCore::from_bus_device(bus, address).map_err(|e| Error::USB("open".into(), e))?;
         Ok(Dfu::from((usb, iface, alt)))
     }
 
@@ -501,6 +503,11 @@ impl Dfu {
             Err(e) => Err(Error::USBNix("Dfuse download".into(), e)),
             Ok(_) => Ok(()),
         }
+    }
+
+    pub fn memory_layout(&mut self) -> Result<MemoryLayout, Error> {
+        // FIXME hardcoded id
+        MemoryLayout::from_str(&self.usb.get_descriptor_string_iface(0, 6))
     }
 
     fn dfuse_upload(&mut self, transaction: u16, xfer: u16) -> Result<Vec<u8>, Error> {

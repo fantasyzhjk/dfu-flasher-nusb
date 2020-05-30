@@ -7,5 +7,6 @@ edition = "2018"
 [dependencies]
 log = ""
 nix = ""
-usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
+#usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
+usbapi = {"path" = "../../usbapi-rs"}
 

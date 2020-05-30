@@ -1,5 +1,4 @@
 use dfu::core::Dfu;
-use dfu::dfuse_command::DfuseCommand;
 use dfu::error::Error;
 use dfu::status::State;
 use env_logger;
@@ -162,6 +161,7 @@ enum Action {
     Verify(VWFlashArgs),
     Detach,
     SetAddress(STMResetArgs),
+    MemoryLayout,
 }
 
 impl fmt::Display for Action {
@@ -193,6 +193,7 @@ impl fmt::Display for Action {
             ),
             SetAddress(a) => write!(f, "Set address 0x{:04X}", a.address),
             Detach => write!(f, "Detach"),
+            MemoryLayout => write!(f, "Memory layout"),
         }
     }
 }
@@ -309,6 +310,10 @@ fn run_main() -> Result<(), Error> {
         Action::Erase(a) => dfu.erase_pages(a.address.0, a.address.1),
         Action::Detach => dfu.detach(),
         Action::SetAddress(a) => dfu.set_address(a.address),
+        Action::MemoryLayout => {
+            println!("{}", dfu.memory_layout()?);
+            Ok(())
+        }
     }
 }
 
