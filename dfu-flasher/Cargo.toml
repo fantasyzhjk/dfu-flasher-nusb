@@ -8,6 +8,7 @@ edition = "2018"
 dfu = { path = "../dfu"}
 log = ""
 structopt = "0.3"
+serde_json = "1"
 nix = ""
 env_logger = ""
 #usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}

@@ -63,8 +63,8 @@ impl fmt::Display for Error {
             ),
             FileIO(io) => write!(f, "IO error {}", io),
             UnknownCommandByte(b) => write!(f, "Unknown command byte: 0x{:X}", b),
-            Address(a) => write!(f, "Address: 0x{:X} not supported", a),
-            Verify(a) => write!(f, "Verify failed at address: 0x{:04X}", a),
+            Address(a) => write!(f, "Address: 0x{:08X} not supported", a),
+            Verify(a) => write!(f, "Verify failed at address: 0x{:08X}", a),
             MemoryLayout(s) => write!(f, "Could not get memory layout from '{}'", s),
         }
     }

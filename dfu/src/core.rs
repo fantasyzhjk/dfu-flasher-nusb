@@ -6,7 +6,7 @@ use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::str::FromStr;
-use usbapi::UsbCore;
+use usbapi::{UsbCore, UsbDevice};
 #[allow(dead_code)]
 const DFU_DETACH: u8 = 0;
 const DFU_DNLOAD: u8 = 1;
@@ -18,66 +18,6 @@ const DFU_CLRSTATUS: u8 = 4;
 const DFU_GETSTATE: u8 = 5;
 #[allow(dead_code)]
 const DFU_ABORT: u8 = 6;
-
-/// 64k STM32F205 page size hardcoded for now FIXME FIXME FIXME
-const PAGE_SIZE16: u32 = 0x4000;
-//const PAGE_SIZE32: u32 = 0x8000;
-const PAGE_SIZE64: u32 = 0x10000;
-
-fn calculate_pages(address: u32, length: u32) -> Result<u16, Error> {
-    // FIXME this should not be hardcoded depending on pages size on STM32 this differs.
-    if length == 0 {
-        return Err(Error::Argument("Length must be > 0".into()));
-    }
-    let pages;
-    if address >= 0x0800_0000 && address <= 0x0800_FFFE {
-        pages = (((length / PAGE_SIZE16) as f32).ceil() as u16
-            + ((length % PAGE_SIZE16) != 0) as u16) as u16;
-    } else if address >= 0x0801_0000 && address <= 0x0801_FFFE {
-        pages = (((length / PAGE_SIZE64) as f32).ceil() as u16
-            + ((length % PAGE_SIZE64) != 0) as u16) as u16;
-    } else {
-        return Err(Error::Address(address));
-    }
-    Ok(pages)
-}
-
-mod tests {
-    #[test]
-    fn test_calculate_pages() {
-        use crate::core::calculate_pages;
-        assert_eq!(
-            true,
-            calculate_pages(0x0800_0000, 0x8000)
-                .map(|pages| { assert_eq!(2, pages) })
-                .is_ok()
-        );
-        assert_eq!(
-            true,
-            calculate_pages(0x0801_0000, 3)
-                .map(|pages| { assert_eq!(1, pages) })
-                .is_ok()
-        );
-        assert_eq!(
-            true,
-            calculate_pages(0x0801_0000, 0x10000)
-                .map(|pages| { assert_eq!(1, pages) })
-                .is_ok()
-        );
-        assert_eq!(
-            true,
-            calculate_pages(0x0801_0000, 0x10001)
-                .map(|pages| { assert_eq!(2, pages) })
-                .is_ok()
-        );
-        assert_eq!(
-            true,
-            calculate_pages(0x0801_0000, 0x20000)
-                .map(|pages| { assert_eq!(2, pages) })
-                .is_ok()
-        );
-    }
-}
 
 #[derive(Debug)]
 struct Transaction {
@@ -132,6 +72,7 @@ pub struct Dfu {
     interface: u16,
     xfer_size: u16,
     detached: bool,
+    mem_layout: MemoryLayout,
 }
 
 impl Drop for Dfu {
@@ -153,15 +94,14 @@ impl Drop for Dfu {
     }
 }
 
-impl From<(UsbCore, u32, u32)> for Dfu {
-    fn from((mut usb, iface, alt): (UsbCore, u32, u32)) -> Self {
+impl From<(UsbCore, MemoryLayout, u32, u32)> for Dfu {
+    fn from((mut usb, mem_layout, iface, alt): (UsbCore, MemoryLayout, u32, u32)) -> Self {
         usb.claim_interface(iface).unwrap_or_else(|e| {
             log::warn!("Claim interface failed with {}", e);
         });
         usb.set_interface(iface, alt).unwrap_or_else(|e| {
             log::warn!("Set interface failed with {}", e);
         });
-        log::debug!("Product: {}", usb.get_descriptor_string_iface(0, 3));
         let timeout = 3000;
         Self {
             usb,
@@ -169,6 +109,7 @@ impl From<(UsbCore, u32, u32)> for Dfu {
             interface: 0,
             xfer_size: 1024,
             detached: false,
+            mem_layout,
         }
     }
 }
@@ -177,7 +118,8 @@ impl Dfu {
     pub fn from_bus_device(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
         let mut usb =
             UsbCore::from_bus_device(bus, address).map_err(|e| Error::USB("open".into(), e))?;
-        Ok(Dfu::from((usb, iface, alt)))
+        let mem = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, 6))?;
+        Ok(Dfu::from((usb, mem, iface, alt)))
     }
 
     pub fn get_status(&mut self, mut retries: u8) -> Result<Status, Error> {
@@ -315,6 +257,7 @@ impl Dfu {
         Ok(v)
     }
 
+    /// Verify flash using file
     pub fn verify(
         &mut self,
         file: &mut File,
@@ -329,7 +272,7 @@ impl Dfu {
         let mut t = Transaction::new(address, length, self.xfer_size);
         while t.xfer > 0 {
             let address = t.address;
-            self.flash_read_next(&mut t, |v| {
+            self.flash_read_chunk(&mut t, |v| {
                 let mut r = vec![0; v.len()];
                 file.read(&mut r)?;
                 let mut i2 = v.iter();
@@ -351,23 +294,24 @@ impl Dfu {
         Ok(())
     }
 
-    pub fn erase_pages(&mut self, mut address: u32, mut length: u32) -> Result<(), Error> {
+    /// Erase pages from start address + length
+    pub fn erase_pages(&mut self, mut address: u32, length: u32) -> Result<(), Error> {
         self.status_wait_for(0, Some(State::DfuIdle))?;
-        let mut pages = calculate_pages(address, length)?;
+        let mut pages = self.mem_layout.num_pages(address, length)?;
+        let page = self.mem_layout.address(address)?;
+        // realign to beginning of page
+        address = page.address;
         while pages > 0 {
             self.dfuse_download(Some(Vec::from(DfuseCommand::ErasePage(address))), 0)?;
             self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
             pages -= 1;
-            if address < 0x08010000 {
-                address += PAGE_SIZE16;
-            } else {
-                address += PAGE_SIZE64;
-            }
+            address += page.size;
         }
         Ok(())
     }
 
+    /// Do mass erase of flash
     pub fn mass_erase(&mut self) -> Result<(), Error> {
         self.status_wait_for(0, Some(State::DfuIdle))?;
         self.dfuse_download(Some(Vec::from(DfuseCommand::MassErase)), 0)?;
@@ -376,7 +320,7 @@ impl Dfu {
         Ok(())
     }
 
-    fn flash_read_next<F>(&mut self, t: &mut Transaction, mut f: F) -> Result<(), Error>
+    fn flash_read_chunk<F>(&mut self, t: &mut Transaction, mut f: F) -> Result<(), Error>
     where
         F: FnMut(Vec<u8>) -> Result<(), Error>,
     {
@@ -387,6 +331,27 @@ impl Dfu {
         Ok(())
     }
 
+    pub fn read_flash(&mut self, address: u32, buf: &mut [u8]) -> Result<usize, Error> {
+        self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+        self.status_wait_for(0, None)?;
+        self.abort_to_idle()?;
+        self.status_wait_for(0, Some(State::DfuIdle))?;
+        let mut len = 0;
+        let mut size = buf.len();
+        let mut t = Transaction::new(address, size as u32, self.xfer_size);
+        while t.xfer > 0 {
+            self.flash_read_chunk(&mut t, |v| {
+                for b in v {
+                    buf[len] = b;
+                    len += 1;
+                }
+                Ok(())
+            })?;
+        }
+        self.abort_to_idle()?;
+        Ok(len)
+    }
+
     /// Upload writes &file to flash.
     pub fn upload(&mut self, file: &mut File, address: u32, length: u32) -> Result<(), Error> {
         self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
@@ -395,7 +360,7 @@ impl Dfu {
         self.status_wait_for(0, Some(State::DfuIdle))?;
         let mut t = Transaction::new(address, length, self.xfer_size);
         while t.xfer > 0 {
-            self.flash_read_next(&mut t, |v| Ok(file.write_all(&v)?))?;
+            self.flash_read_chunk(&mut t, |v| Ok(file.write_all(&v)?))?;
         }
         self.abort_to_idle()?;
         Ok(())
@@ -505,9 +470,12 @@ impl Dfu {
         }
     }
 
-    pub fn memory_layout(&mut self) -> Result<MemoryLayout, Error> {
-        // FIXME hardcoded id
-        MemoryLayout::from_str(&self.usb.get_descriptor_string_iface(0, 6))
+    pub fn descriptors(&mut self) -> &Option<UsbDevice> {
+        self.usb.descriptors()
+    }
+
+    pub fn memory_layout(&self) -> &MemoryLayout {
+        &self.mem_layout
     }
 
     fn dfuse_upload(&mut self, transaction: u16, xfer: u16) -> Result<Vec<u8>, Error> {

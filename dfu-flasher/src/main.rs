@@ -122,7 +122,7 @@ struct STMResetArgs {
 }
 
 #[derive(StructOpt, PartialEq)]
-struct EraseArgs {
+struct AddressArgs {
     /// start_address:num_pages
     #[structopt(short = "s", long, parse(try_from_str=parse_address_and_length))]
     address: (u32, u32),
@@ -155,13 +155,15 @@ enum Action {
     SupportedCommands,
     Reset(STMResetArgs),
     EraseAll,
-    Erase(EraseArgs),
+    Erase(AddressArgs),
     Read(ReadFlashArgs),
     Write(VWFlashArgs),
     Verify(VWFlashArgs),
     Detach,
     SetAddress(STMResetArgs),
     MemoryLayout,
+    ShowDescriptors,
+    ReadAddress(AddressArgs),
 }
 
 impl fmt::Display for Action {
@@ -188,12 +190,14 @@ impl fmt::Display for Action {
             ),
             Verify(a) => write!(
                 f,
-                "Read flash from start address: 0x{:04X} length: {:?} bytes and verify using file '{:?}'",
+                "Read flash from start address: 0x{:08X} length: {:?} bytes and verify using file '{:?}'",
                 a.address.0, a.address.1, a.file_name
             ),
-            SetAddress(a) => write!(f, "Set address 0x{:04X}", a.address),
+            SetAddress(a) => write!(f, "Set address 0x{:08X}", a.address),
             Detach => write!(f, "Detach"),
             MemoryLayout => write!(f, "Memory layout"),
+            ShowDescriptors => write!(f, "Show descriptors"),
+            ReadAddress(a) => write!(f, "Read address 0x{:08X} length: {} bytes", a.address.0, a.address.1),
         }
     }
 }
@@ -309,9 +313,37 @@ fn run_main() -> Result<(), Error> {
         Action::EraseAll => dfu.mass_erase(),
         Action::Erase(a) => dfu.erase_pages(a.address.0, a.address.1),
         Action::Detach => dfu.detach(),
+        Action::ReadAddress(a) => {
+            let mut buf = vec![0; a.address.1 as usize];
+            let len = dfu.read_flash(a.address.0, &mut buf)?;
+            let mut address = a.address.0;
+            //print!("0x{:08X} ", address);
+            //address += 16;
+            for (i, b) in buf[0..len].iter().enumerate() {
+                if (i % 16) == 0 {
+                    println!();
+                    print!("0x{:08X} ", address);
+                    print!("{:02X}", b);
+                    address += 16;
+                } else {
+                    print!(":{:02X}", b);
+                }
+            }
+            Ok(())
+        }
         Action::SetAddress(a) => dfu.set_address(a.address),
         Action::MemoryLayout => {
-            println!("{}", dfu.memory_layout()?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&dfu.memory_layout().pages()).unwrap(),
+            );
+            Ok(())
+        }
+        Action::ShowDescriptors => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(dfu.descriptors()).unwrap()
+            );
             Ok(())
         }
     }

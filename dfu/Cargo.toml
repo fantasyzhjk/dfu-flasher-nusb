@@ -10,3 +10,7 @@ nix = ""
 #usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
 usbapi = {"path" = "../../usbapi-rs"}
 
+[dependencies.serde]
+version = "1"
+features=["derive"]
+
