@@ -315,7 +315,7 @@ fn run_main() -> Result<(), Error> {
         Action::Detach => dfu.detach(),
         Action::ReadAddress(a) => {
             let mut buf = vec![0; a.address.1 as usize];
-            let len = dfu.read_flash(a.address.0, &mut buf)?;
+            let len = dfu.read_flash_to_slice(a.address.0, &mut buf)?;
             let mut address = a.address.0;
             //print!("0x{:08X} ", address);
             //address += 16;

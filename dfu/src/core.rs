@@ -331,7 +331,46 @@ impl Dfu {
         Ok(())
     }
 
-    pub fn read_flash(&mut self, address: u32, buf: &mut [u8]) -> Result<usize, Error> {
+    pub fn write_flash_from_slice(&mut self, address: u32, buf: &[u8]) -> Result<usize, Error> {
+        let mut length = buf.len() as u32;
+        self.erase_pages(address, length)?;
+        self.abort_to_idle()?;
+        self.status_wait_for(0, Some(State::DfuIdle))?;
+        let mut transaction = 2;
+        let mut xfer;
+        if length >= self.xfer_size as u32 {
+            panic!(
+                "FIXME write_flash_from_slice only allow xfer size max {}",
+                self.xfer_size
+            );
+        }
+        while length != 0 {
+            if length >= self.xfer_size as u32 {
+                xfer = self.xfer_size;
+                length -= self.xfer_size as u32;
+            } else {
+                xfer = length as u16;
+                length = 0;
+            }
+            log::debug!(
+                "{}: 0x{:4X} xfer: {} length: {}",
+                transaction,
+                address,
+                xfer,
+                length
+            );
+            self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+            self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
+            self.dfuse_download(Some(buf.into()), transaction)?;
+            self.status_wait_for(100, Some(State::DfuDownloadBusy))?;
+            self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
+            transaction += 1;
+        }
+        self.abort_to_idle()?;
+        Ok(length as usize)
+    }
+
+    pub fn read_flash_to_slice(&mut self, address: u32, buf: &mut [u8]) -> Result<usize, Error> {
         self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
@@ -352,7 +391,7 @@ impl Dfu {
         Ok(len)
     }
 
-    /// Upload writes &file to flash.
+    /// Upload read flash and store it in file.
     pub fn upload(&mut self, file: &mut File, address: u32, length: u32) -> Result<(), Error> {
         self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
         self.status_wait_for(0, None)?;
@@ -437,7 +476,7 @@ impl Dfu {
                 length
             );
             let mut buf = vec![0; xfer as usize];
-            file.read(&mut buf)?;
+            file.read_exact(&mut buf)?;
             self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
             self.dfuse_download(Some(buf), transaction)?;
