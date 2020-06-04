@@ -115,9 +115,9 @@ impl From<(UsbCore, MemoryLayout, u32, u32)> for Dfu {
 }
 
 impl Dfu {
-    pub fn from_bus_device(bus: u8, address: u8, iface: u32, alt: u32) -> Result<Self, Error> {
+    pub fn from_bus_device(bus: u8, dev: u8, iface: u32, alt: u32) -> Result<Self, Error> {
         let mut usb =
-            UsbCore::from_bus_device(bus, address).map_err(|e| Error::USB("open".into(), e))?;
+            UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
         let mem = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, 6))?;
         Ok(Dfu::from((usb, mem, iface, alt)))
     }
@@ -531,5 +531,9 @@ impl Dfu {
             Err(e) => Err(Error::USBNix("Dfuse upload".into(), e)),
             Ok(buf) => Ok(buf),
         }
+    }
+
+    pub fn usb(&mut self) -> &mut UsbCore {
+        &mut self.usb
     }
 }
