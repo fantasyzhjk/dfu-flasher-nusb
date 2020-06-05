@@ -97,10 +97,10 @@ impl Drop for Dfu {
 impl From<(UsbCore, MemoryLayout, u32, u32)> for Dfu {
     fn from((mut usb, mem_layout, iface, alt): (UsbCore, MemoryLayout, u32, u32)) -> Self {
         usb.claim_interface(iface).unwrap_or_else(|e| {
-            log::warn!("Claim interface failed with {}", e);
+            log::error!("Claim interface failed with {}", e);
         });
         usb.set_interface(iface, alt).unwrap_or_else(|e| {
-            log::warn!("Set interface failed with {}", e);
+            log::error!("Set interface failed with {}", e);
         });
         let timeout = 3000;
         Self {
