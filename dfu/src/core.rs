@@ -80,7 +80,7 @@ impl Drop for Dfu {
         if self.detached {
             return;
         }
-        if let Err(_) = self.status_wait_for(0, Some(State::DfuIdle)) {
+        if self.status_wait_for(0, Some(State::DfuIdle)).is_err() {
             log::debug!("Dfu was not idle abort to idle");
             self.abort_to_idle().unwrap_or_else(|e| {
                 log::warn!("Abort to idle failed {}", e);
@@ -208,7 +208,7 @@ impl Dfu {
 
         // check if expected state and return fail if not
         if s.state != u8::from(&wait_for_state) {
-            return Err(Error::InvalidState(s, wait_for_state.clone()));
+            return Err(Error::InvalidState(s, wait_for_state));
         }
 
         if s.status != 0 {
@@ -232,7 +232,7 @@ impl Dfu {
         self.dfuse_download(None, 2)?;
         log::debug!("dfuse None, 2 done");
         self.get_status(0).unwrap_or_else(|e| {
-            log::warn!("get_status failed");
+            log::warn!("get_status failed cause {}", e);
             Status::default()
         });
         self.detached = true;
@@ -274,7 +274,7 @@ impl Dfu {
             let address = t.address;
             self.flash_read_chunk(&mut t, |v| {
                 let mut r = vec![0; v.len()];
-                file.read(&mut r)?;
+                file.read_exact(&mut r)?;
                 let mut i2 = v.iter();
                 for (i, byte) in r.iter().enumerate() {
                     if let Some(byte2) = i2.next() {
@@ -376,7 +376,7 @@ impl Dfu {
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
         let mut len = 0;
-        let mut size = buf.len();
+        let size = buf.len();
         let mut t = Transaction::new(address, size as u32, self.xfer_size);
         while t.xfer > 0 {
             self.flash_read_chunk(&mut t, |v| {

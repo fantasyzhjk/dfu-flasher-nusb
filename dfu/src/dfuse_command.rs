@@ -66,9 +66,9 @@ impl fmt::Display for DfuseCommand {
 }
 
 mod tests {
-    use crate::DfuseCommand;
     #[test]
     fn test_dfuse_command() {
+        use crate::DfuseCommand;
         let vec = Vec::from(DfuseCommand::MassErase);
         assert_eq!(1, vec.len());
         assert_eq!(&vec![0x41], &vec);

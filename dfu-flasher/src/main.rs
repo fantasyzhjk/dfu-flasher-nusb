@@ -23,7 +23,7 @@ fn parse_address_and_length_as_some(
     let mut sp = dfuse_address.split(":");
     let a = sp.next().unwrap_or("0x0800_0000");
     address = parse_int(a)?;
-    let mut length = if let Some(s) = sp.next() {
+    let length = if let Some(s) = sp.next() {
         Some(parse_int(&s)?)
     } else {
         None
@@ -34,19 +34,6 @@ fn parse_address_and_length_as_some(
 fn parse_address_and_length(address: &str) -> Result<(u32, u32), std::num::ParseIntError> {
     let a = parse_address_and_length_as_some(address)?;
     Ok((a.0, a.1.unwrap_or(0)))
-}
-
-fn parse_address_and_pages(dfuse_address: &str) -> Result<(u32, u8), std::num::ParseIntError> {
-    let address;
-    let length;
-    let mut sp = dfuse_address.split(":");
-    let a = sp.next().unwrap_or("0x0800_0000");
-    address = parse_int(a)?;
-    length = parse_int(sp.next().unwrap_or("0"))?;
-    if length > 255 {
-        panic!("Pages must be less than 256")
-    }
-    Ok((address, length as u8))
 }
 
 mod tests {
@@ -250,8 +237,7 @@ impl Args {
                 return Err(Error::Argument("expect bus:device".into()));
             }
         } else {
-            let mut e = UsbEnumerate::new();
-            e.enumerate()?;
+            let e = UsbEnumerate::from_sysfs()?;
             let mut msg =
                 format!("Missing --bus-device or --dev! List of possible USB devices:\n\n");
             for (bus, dev) in e

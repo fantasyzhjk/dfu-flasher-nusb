@@ -94,7 +94,7 @@ impl fmt::Display for Status {
 }
 
 impl Status {
-    pub fn get(usb: &mut UsbCore, interface: u16) -> Result<Self, Error> {
+    pub fn get(usb: &mut UsbCore, _interface: u16) -> Result<Self, Error> {
         let mut s = Self::default();
         use usbapi::os::linux::usbfs::*;
         let buf = vec![0 as u8; 6];

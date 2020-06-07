@@ -18,23 +18,23 @@ impl FromStr for MemoryLayout {
     type Err = Error;
     fn from_str(s: &str) -> Result<Self, Error> {
         let s = &s.replace("0x", "");
-        let mut sp = s.split("/");
-        let address = sp.nth(1).ok_or(Error::MemoryLayout(s.into()))?;
+        let mut sp = s.split('/');
+        let address = sp.nth(1).ok_or_else(|| Error::MemoryLayout(s.into()))?;
         let mut address =
             u32::from_str_radix(&address, 16).map_err(|_| Error::MemoryLayout(s.into()))?;
         let mut pages = Vec::new();
         for p in sp
             .next()
-            .ok_or(Error::MemoryLayout(format!("Missing pages in {}", s)))?
-            .split(",")
+            .ok_or_else(|| Error::MemoryLayout(format!("Missing pages in {}", s)))?
+            .split(',')
         {
-            let mut keyval = p.split("*");
+            let mut keyval = p.split('*');
             let page_count: u32 = keyval
                 .next()
-                .ok_or(Error::MemoryLayout(p.into()))?
+                .ok_or_else(|| Error::MemoryLayout(p.into()))?
                 .parse()
                 .map_err(|_| Error::MemoryLayout(p.into()))?;
-            let valprefix = keyval.next().ok_or(Error::MemoryLayout(p.into()))?;
+            let valprefix = keyval.next().ok_or_else(|| Error::MemoryLayout(p.into()))?;
             let size = valprefix.trim_matches(char::is_alphabetic);
             let prefix = valprefix.trim_matches(char::is_numeric);
             let mut size: u32 = size.parse().map_err(|_| Error::MemoryLayout(size.into()))?;
@@ -63,7 +63,7 @@ impl fmt::Display for MemoryLayout {
                 f,
                 "{}: Start: 0x{:08X} Size: {} bytes",
                 i, p.address, p.size
-            );
+            )?;
         }
 
         write!(f, "")
