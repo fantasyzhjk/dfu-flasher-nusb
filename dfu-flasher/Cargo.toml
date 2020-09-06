@@ -16,4 +16,4 @@ structopt = "0.3"
 serde_json = "1"
 nix = "0.18"
 env_logger = "0.7"
-usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs", version = "0.2"}
+usbapi = "0.2"

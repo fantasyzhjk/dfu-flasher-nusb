@@ -11,7 +11,7 @@ homepage = "https://gitlab.com/mike7b4/dfuflash.git"
 [dependencies]
 log = "0.4"
 nix = "0.18"
-usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
+usbapi = "0.2"
 serde-hex = "0.1"
 
 [dependencies.serde]
