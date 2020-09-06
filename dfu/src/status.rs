@@ -1,7 +1,7 @@
 use crate::core::*;
 use crate::error::Error;
 use std::fmt;
-use usbapi::UsbCore;
+use usbapi::{UsbCore, ENDPOINT_IN, RECIPIENT_INTERFACE, REQUEST_TYPE_CLASS};
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
     AppIdle,

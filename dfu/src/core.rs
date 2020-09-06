@@ -6,7 +6,7 @@ use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::str::FromStr;
-use usbapi::{UsbCore, UsbDevice};
+use usbapi::*;
 #[allow(dead_code)]
 const DFU_DETACH: u8 = 0;
 const DFU_DNLOAD: u8 = 1;
