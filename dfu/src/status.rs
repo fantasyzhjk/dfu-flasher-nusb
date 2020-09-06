@@ -108,7 +108,7 @@ impl Status {
         );
         let data = usb
             .control_async_wait(ctl)
-            .map_err(|e| Error::USBNix("Control transfer: DFU_GET_STATUS".into(), e))?;
+            .map_err(|e| Error::USB("Control transfer: DFU_GET_STATUS".into(), e))?;
 
         let mut data = data.iter();
         if data.len() != 6 {

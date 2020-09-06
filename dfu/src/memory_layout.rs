@@ -1,10 +1,11 @@
 use crate::error::Error;
 use serde::Serialize;
+use serde_hex::{SerHex, StrictPfx};
 use std::fmt;
 use std::str::FromStr;
-
 #[derive(Debug, Serialize)]
 pub struct Page {
+    #[serde(with = "SerHex::<StrictPfx>")]
     pub(crate) address: u32,
     pub(crate) size: u32,
 }

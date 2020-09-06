@@ -1,14 +1,18 @@
 [package]
 name = "dfu"
 version = "0.1.0"
-authors = ["mikael <mike7b4@protonmail.com>"]
+authors = ["Mikael <mike7b4@protonmail.com>"]
 edition = "2018"
+license = "MIT"
+description = "The core DFU library used by DFU flasher."
+repository = "https://gitlab.com/mike7b4/dfuflash"
+homepage = "https://gitlab.com/mike7b4/dfuflash.git"
 
 [dependencies]
-log = ""
-nix = ""
+log = "0.4"
+nix = "0.18"
 usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
-#usbapi = {"path" = "../../usbapi-rs"}
+serde-hex = "0.1"
 
 [dependencies.serde]
 version = "1"

@@ -129,13 +129,11 @@ impl Dfu {
             retries -= 1;
             status = Status::get(&mut self.usb, self.interface);
             if let Err(e) = &status {
-                if let Error::USBNix(_, e) = e {
-                    if let nix::Error::Sys(e) = e {
-                        if *e == nix::errno::Errno::EPIPE {
-                            log::warn!("Epipe try again");
-                            std::thread::sleep(std::time::Duration::from_millis(3000));
-                            continue;
-                        }
+                if let Error::USB(_, e) = e {
+                    if e.kind() == std::io::ErrorKind::BrokenPipe {
+                        log::warn!("Epipe try again");
+                        std::thread::sleep(std::time::Duration::from_millis(3000));
+                        continue;
                     }
                 } else if let Error::InvalidControlResponse(e) = e {
                     log::warn!("retries {} Get status error cause '{}'", retries, e);
@@ -162,7 +160,7 @@ impl Dfu {
         let _ = self
             .usb
             .control(ctl)
-            .map_err(|e| Error::USBNix("Control transfer".into(), e))?;
+            .map_err(|e| Error::USB("Control transfer".into(), e))?;
 
         Ok(())
     }
@@ -180,7 +178,7 @@ impl Dfu {
         let _ = self
             .usb
             .control(ctl)
-            .map_err(|e| Error::USBNix("Detach".into(), e))?;
+            .map_err(|e| Error::USB("Detach".into(), e))?;
 
         Ok(())
     }
@@ -417,7 +415,7 @@ impl Dfu {
         );
         self.usb
             .control_async_wait(ctl)
-            .map_err(|e| Error::USBNix("Abort to idle".into(), e))?;
+            .map_err(|e| Error::USB("Abort to idle".into(), e))?;
         let s = self.get_status(0)?;
         if s.state != u8::from(&State::DfuIdle) {
             return Err(Error::InvalidState(s, State::DfuIdle));
@@ -499,12 +497,12 @@ impl Dfu {
             self.timeout,
         );
         match self.usb.control(ctl.clone()) {
-            Err(nix::Error::Sys(e)) if e == nix::errno::Errno::EPIPE => {
+            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
                 log::warn!("stalled on {:X?}", ctl);
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 Ok(())
             }
-            Err(e) => Err(Error::USBNix("Dfuse download".into(), e)),
+            Err(e) => Err(Error::USB("Dfuse download".into(), e)),
             Ok(_) => Ok(()),
         }
     }
@@ -528,7 +526,7 @@ impl Dfu {
             self.timeout,
         );
         match self.usb.control_async_wait(ctl) {
-            Err(e) => Err(Error::USBNix("Dfuse upload".into(), e)),
+            Err(e) => Err(Error::USB("Dfuse upload".into(), e)),
             Ok(buf) => Ok(buf),
         }
     }

@@ -1,7 +1,6 @@
 use dfu::core::Dfu;
 use dfu::error::Error;
 use dfu::status::State;
-use env_logger;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
@@ -20,7 +19,7 @@ fn parse_address_and_length_as_some(
     dfuse_address: &str,
 ) -> Result<(u32, Option<u32>), std::num::ParseIntError> {
     let address;
-    let mut sp = dfuse_address.split(":");
+    let mut sp = dfuse_address.split(':');
     let a = sp.next().unwrap_or("0x0800_0000");
     address = parse_int(a)?;
     let length = if let Some(s) = sp.next() {
@@ -210,9 +209,10 @@ struct Args {
     bus: u8,
     #[structopt(skip)]
     device: u8,
-
     #[structopt(subcommand)]
     action: Action,
+    #[structopt(short, long, parse(from_occurrences))]
+    verbose: usize,
 }
 
 impl Args {
@@ -239,7 +239,7 @@ impl Args {
         } else {
             let e = UsbEnumerate::from_sysfs()?;
             let mut msg =
-                format!("Missing --bus-device or --dev! List of possible USB devices:\n\n");
+                String::from("Missing --bus-device or --dev! List of possible USB devices:\n\n");
             for (bus, dev) in e
                 .devices()
                 .iter()
@@ -262,6 +262,7 @@ impl Args {
 
 fn run_main() -> Result<(), Error> {
     let args = Args::new()?;
+    env_logger_init("dfu-flasher", args.verbose)?;
     let mut dfu = Dfu::from_bus_device(args.bus, args.device, args.intf, args.alt)?;
     dfu.status_wait_for(0, Some(State::DfuIdle))?;
     log::info!("Execute action: {}", args.action);
@@ -335,9 +336,24 @@ fn run_main() -> Result<(), Error> {
     }
 }
 
+fn env_logger_init(_appname: &str, verbose: usize) -> Result<(), std::io::Error> {
+    use env_logger::Builder;
+    use log::LevelFilter;
+    match verbose {
+        0 => Builder::from_default_env()
+            .filter(None, LevelFilter::Info)
+            .init(),
+        1 => Builder::from_default_env()
+            .filter(None, LevelFilter::Debug)
+            .init(),
+        _ => Builder::from_default_env()
+            .filter(None, LevelFilter::Trace)
+            .init(),
+    }
+    Ok(())
+}
+
 fn main() {
-    let env = env_logger::Env::default().filter_or("DFU_FLASHER_LOG", "debug");
-    env_logger::init_from_env(env);
     if let Err(err) = run_main() {
         log::error!("{}", err);
         std::process::exit(i32::from(err));
