@@ -7,12 +7,13 @@ license = "MIT"
 description = "Dfu-flasher redone in pure Rust"
 homepage = "https://gitlab.com/mike7b4/dfuflash"
 repository = "https://gitlab.com/mike7b4/dfuflash.git"
+readme = "readme.md"
 
 [dependencies]
-dfu = { path = "../dfu"}
+dfu = { path = "../dfu", version = "0.2"}
 log = "0.4"
 structopt = "0.3"
 serde_json = "1"
 nix = "0.18"
 env_logger = "0.7"
-usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs"}
+usbapi = {"git" = "https://gitlab.com/mike7b4/usbapi-rs", version = "0.2"}
