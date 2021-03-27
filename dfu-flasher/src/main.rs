@@ -218,6 +218,7 @@ struct Args {
 impl Args {
     fn new() -> Result<Self, Error> {
         let mut args = Self::from_args();
+        env_logger_init("dfu-flasher", args.verbose);
         if args.dev.is_some() && args.bus_device.is_some() {
             return Err(Error::Argument(
                 "Both vendor:product and bus:address cannot be specified at once!".into(),
@@ -262,7 +263,6 @@ impl Args {
 
 fn run_main() -> Result<(), Error> {
     let args = Args::new()?;
-    env_logger_init("dfu-flasher", args.verbose)?;
     let mut dfu = Dfu::from_bus_device(args.bus, args.device, args.intf, args.alt)?;
     dfu.status_wait_for(0, Some(State::DfuIdle))?;
     log::info!("Execute action: {}", args.action);
@@ -336,7 +336,7 @@ fn run_main() -> Result<(), Error> {
     }
 }
 
-fn env_logger_init(_appname: &str, verbose: usize) -> Result<(), std::io::Error> {
+fn env_logger_init(_appname: &str, verbose: usize) {
     use env_logger::Builder;
     use log::LevelFilter;
     match verbose {
@@ -350,7 +350,6 @@ fn env_logger_init(_appname: &str, verbose: usize) -> Result<(), std::io::Error>
             .filter(None, LevelFilter::Trace)
             .init(),
     }
-    Ok(())
 }
 
 fn main() {
