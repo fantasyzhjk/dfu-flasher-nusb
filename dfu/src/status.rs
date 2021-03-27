@@ -1,7 +1,8 @@
 use crate::core::*;
 use crate::error::Error;
 use std::fmt;
-use usbapi::{UsbCore, ENDPOINT_IN, RECIPIENT_INTERFACE, REQUEST_TYPE_CLASS};
+use std::time::Duration;
+use usbapi::{ControlTransfer, UsbCore, ENDPOINT_IN, RECIPIENT_INTERFACE, REQUEST_TYPE_CLASS};
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
     AppIdle,
@@ -96,15 +97,13 @@ impl fmt::Display for Status {
 impl Status {
     pub fn get(usb: &mut UsbCore, _interface: u16) -> Result<Self, Error> {
         let mut s = Self::default();
-        use usbapi::os::linux::usbfs::*;
-        let buf = vec![0 as u8; 6];
-        let ctl = ControlTransfer::new(
+        let ctl = ControlTransfer::new_read(
             ENDPOINT_IN | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_GET_STATUS,
             0,
             0,
-            Some(buf),
-            3000,
+            6,
+            Duration::from_millis(3000),
         );
         let data = usb
             .control_async_wait(ctl)

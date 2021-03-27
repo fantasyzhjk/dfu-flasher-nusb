@@ -6,6 +6,7 @@ use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::str::FromStr;
+use std::time::Duration;
 use usbapi::*;
 #[allow(dead_code)]
 const DFU_DETACH: u8 = 0;
@@ -68,7 +69,7 @@ impl Iterator for Transaction {
 
 pub struct Dfu {
     usb: UsbCore,
-    timeout: u32,
+    timeout: Duration,
     interface: u16,
     xfer_size: u16,
     detached: bool,
@@ -102,7 +103,7 @@ impl From<(UsbCore, MemoryLayout, u32, u32)> for Dfu {
         usb.set_interface(iface, alt).unwrap_or_else(|e| {
             log::error!("Set interface failed with {}", e);
         });
-        let timeout = 3000;
+        let timeout = Duration::from_millis(3000);
         Self {
             usb,
             timeout,
@@ -118,7 +119,7 @@ impl Dfu {
     pub fn from_bus_device(bus: u8, dev: u8, iface: u32, alt: u32) -> Result<Self, Error> {
         let mut usb =
             UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
-        let mem = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, 6))?;
+        let mem = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, 6)?)?;
         Ok(Dfu::from((usb, mem, iface, alt)))
     }
 
@@ -148,36 +149,32 @@ impl Dfu {
     }
 
     pub fn clear_status(&mut self) -> Result<(), Error> {
-        use usbapi::os::linux::usbfs::*;
-        let ctl = ControlTransfer::new(
+        let ctl = ControlTransfer::new_nodata(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_CLRSTATUS,
             0,
             self.interface,
-            None,
             self.timeout,
         );
         let _ = self
             .usb
-            .control(ctl)
+            .control_async_wait(ctl)
             .map_err(|e| Error::USB("Control transfer".into(), e))?;
 
         Ok(())
     }
 
     pub fn detach(&mut self) -> Result<(), Error> {
-        use usbapi::os::linux::usbfs::*;
-        let ctl = ControlTransfer::new(
+        let ctl = ControlTransfer::new_nodata(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_DETACH,
             0,
             self.interface,
-            None,
             self.timeout,
         );
         let _ = self
             .usb
-            .control(ctl)
+            .control_async_wait(ctl)
             .map_err(|e| Error::USB("Detach".into(), e))?;
 
         Ok(())
@@ -216,7 +213,7 @@ impl Dfu {
     }
 
     pub fn set_address(&mut self, address: u32) -> Result<(), Error> {
-        self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
         self.status_wait_for(0, Some(State::DfuDownloadIdle))?;
         Ok(())
     }
@@ -227,7 +224,7 @@ impl Dfu {
         log::debug!("set done");
         //        self.abort_to_idle()?;
         //       log::debug!("abort done");
-        self.dfuse_download(None, 2)?;
+        self.dfuse_download(Vec::new(), 2)?;
         log::debug!("dfuse None, 2 done");
         self.get_status(0).unwrap_or_else(|e| {
             log::warn!("get_status failed cause {}", e);
@@ -263,7 +260,7 @@ impl Dfu {
         length: Option<u32>,
     ) -> Result<(), Error> {
         let length = Self::get_length_from_file(file, length)?;
-        self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
@@ -300,7 +297,7 @@ impl Dfu {
         // realign to beginning of page
         address = page.address;
         while pages > 0 {
-            self.dfuse_download(Some(Vec::from(DfuseCommand::ErasePage(address))), 0)?;
+            self.dfuse_download(Vec::from(DfuseCommand::ErasePage(address)), 0)?;
             self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
             pages -= 1;
@@ -312,7 +309,7 @@ impl Dfu {
     /// Do mass erase of flash
     pub fn mass_erase(&mut self) -> Result<(), Error> {
         self.status_wait_for(0, Some(State::DfuIdle))?;
-        self.dfuse_download(Some(Vec::from(DfuseCommand::MassErase)), 0)?;
+        self.dfuse_download(Vec::from(DfuseCommand::MassErase), 0)?;
         self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
         self.status_wait_for(10, Some(State::DfuDownloadIdle))?;
         Ok(())
@@ -357,9 +354,9 @@ impl Dfu {
                 xfer,
                 length
             );
-            self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+            self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
-            self.dfuse_download(Some(buf.into()), transaction)?;
+            self.dfuse_download(buf.into(), transaction)?;
             self.status_wait_for(100, Some(State::DfuDownloadBusy))?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
             transaction += 1;
@@ -369,7 +366,7 @@ impl Dfu {
     }
 
     pub fn read_flash_to_slice(&mut self, address: u32, buf: &mut [u8]) -> Result<usize, Error> {
-        self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
@@ -391,7 +388,7 @@ impl Dfu {
 
     /// Upload read flash and store it in file.
     pub fn upload(&mut self, file: &mut File, address: u32, length: u32) -> Result<(), Error> {
-        self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
@@ -404,13 +401,11 @@ impl Dfu {
     }
 
     pub fn abort_to_idle(&mut self) -> Result<(), Error> {
-        use usbapi::os::linux::usbfs::*;
-        let ctl = ControlTransfer::new(
+        let ctl = ControlTransfer::new_nodata(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_ABORT,
             0,
             self.interface,
-            None,
             self.timeout,
         );
         self.usb
@@ -475,9 +470,9 @@ impl Dfu {
             );
             let mut buf = vec![0; xfer as usize];
             file.read_exact(&mut buf)?;
-            self.dfuse_download(Some(Vec::from(DfuseCommand::SetAddress(address))), 0)?;
+            self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
-            self.dfuse_download(Some(buf), transaction)?;
+            self.dfuse_download(buf, transaction)?;
             self.status_wait_for(100, Some(State::DfuDownloadBusy))?;
             self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
             transaction += 1;
@@ -486,9 +481,8 @@ impl Dfu {
         Ok(())
     }
 
-    fn dfuse_download(&mut self, buf: Option<Vec<u8>>, transaction: u16) -> Result<(), Error> {
-        use usbapi::os::linux::usbfs::*;
-        let ctl = ControlTransfer::new(
+    fn dfuse_download(&mut self, buf: Vec<u8>, transaction: u16) -> Result<(), Error> {
+        let ctl = ControlTransfer::new_with_data(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_DNLOAD,
             transaction,
@@ -496,7 +490,7 @@ impl Dfu {
             buf,
             self.timeout,
         );
-        match self.usb.control(ctl.clone()) {
+        match self.usb.control_async_wait(ctl.clone()) {
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
                 log::warn!("stalled on {:X?}", ctl);
                 std::thread::sleep(std::time::Duration::from_millis(10));
@@ -516,13 +510,12 @@ impl Dfu {
     }
 
     fn dfuse_upload(&mut self, transaction: u16, xfer: u16) -> Result<Vec<u8>, Error> {
-        use usbapi::os::linux::usbfs::*;
-        let ctl = ControlTransfer::new(
+        let ctl = ControlTransfer::new_read(
             ENDPOINT_IN | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_UPLOAD,
             transaction,
             self.interface,
-            Some(vec![0 as u8; xfer as usize]),
+            xfer,
             self.timeout,
         );
         match self.usb.control_async_wait(ctl) {

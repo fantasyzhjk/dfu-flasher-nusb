@@ -342,6 +342,7 @@ fn env_logger_init(_appname: &str, verbose: usize) {
     match verbose {
         0 => Builder::from_default_env()
             .filter(None, LevelFilter::Info)
+            .format_timestamp_millis()
             .init(),
         1 => Builder::from_default_env()
             .filter(None, LevelFilter::Debug)
