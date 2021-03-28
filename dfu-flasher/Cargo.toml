@@ -1,6 +1,6 @@
 [package]
 name = "dfu-flasher"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["mikael <mike7b4@protonmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -16,4 +16,4 @@ structopt = "0.3"
 serde_json = "1"
 nix = "0.18"
 env_logger = "0.7"
-usbapi = "0.3"
+usbapi = {version = "0.3", features = ["serde"]}
