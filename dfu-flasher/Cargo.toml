@@ -1,6 +1,6 @@
 [package]
 name = "dfu-flasher"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["mikael <mike7b4@protonmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -10,10 +10,10 @@ repository = "https://gitlab.com/mike7b4/dfuflash.git"
 readme = "readme.md"
 
 [dependencies]
-dfu = { path = "../dfu", version = "0.3"}
+dfu = { path = "../dfu", version = "0.4"}
 log = "0.4"
 structopt = "0.3"
 serde_json = "1"
-nix = "0.18"
+nix = "0.20"
 env_logger = "0.7"
-usbapi = {version = "0.3", features = ["serde"]}
+usbapi = {version = "0.4", features = ["serde"]}

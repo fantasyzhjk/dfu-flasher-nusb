@@ -149,32 +149,30 @@ impl Dfu {
     }
 
     pub fn clear_status(&mut self) -> Result<(), Error> {
-        let ctl = ControlTransfer::new_nodata(
+        let ctl = self.usb.new_control_nodata(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_CLRSTATUS,
             0,
             self.interface,
-            self.timeout,
-        );
+        )?;
         let _ = self
             .usb
-            .control_async_wait(ctl)
+            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
             .map_err(|e| Error::USB("Control transfer".into(), e))?;
 
         Ok(())
     }
 
     pub fn detach(&mut self) -> Result<(), Error> {
-        let ctl = ControlTransfer::new_nodata(
+        let ctl = self.usb.new_control_nodata(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_DETACH,
             0,
             self.interface,
-            self.timeout,
-        );
+        )?;
         let _ = self
             .usb
-            .control_async_wait(ctl)
+            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
             .map_err(|e| Error::USB("Detach".into(), e))?;
 
         Ok(())
@@ -401,15 +399,14 @@ impl Dfu {
     }
 
     pub fn abort_to_idle(&mut self) -> Result<(), Error> {
-        let ctl = ControlTransfer::new_nodata(
+        let ctl = self.usb.new_control_nodata(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_ABORT,
             0,
             self.interface,
-            self.timeout,
-        );
+        )?;
         self.usb
-            .control_async_wait(ctl)
+            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
             .map_err(|e| Error::USB("Abort to idle".into(), e))?;
         let s = self.get_status(0)?;
         if s.state != u8::from(&State::DfuIdle) {
@@ -482,17 +479,19 @@ impl Dfu {
     }
 
     fn dfuse_download(&mut self, buf: Vec<u8>, transaction: u16) -> Result<(), Error> {
-        let ctl = ControlTransfer::new_with_data(
+        let ctl = self.usb.new_control_out(
             ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_DNLOAD,
             transaction,
             self.interface,
-            buf,
-            self.timeout,
-        );
-        match self.usb.control_async_wait(ctl.clone()) {
+            &buf,
+        )?;
+        match self
+            .usb
+            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
+        {
             Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                log::warn!("stalled on {:X?}", ctl);
+                log::warn!("stalled on transaction {}", transaction);
                 std::thread::sleep(std::time::Duration::from_millis(10));
                 Ok(())
             }
@@ -510,17 +509,19 @@ impl Dfu {
     }
 
     fn dfuse_upload(&mut self, transaction: u16, xfer: u16) -> Result<Vec<u8>, Error> {
-        let ctl = ControlTransfer::new_read(
+        let ctl = self.usb.new_control_in(
             ENDPOINT_IN | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_UPLOAD,
             transaction,
             self.interface,
             xfer,
-            self.timeout,
-        );
-        match self.usb.control_async_wait(ctl) {
+        )?;
+        match self
+            .usb
+            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
+        {
             Err(e) => Err(Error::USB("Dfuse upload".into(), e)),
-            Ok(buf) => Ok(buf),
+            Ok(buf) => Ok(buf.buffer_from_raw().to_vec()),
         }
     }
 

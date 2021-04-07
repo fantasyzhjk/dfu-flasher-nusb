@@ -2,7 +2,10 @@ use crate::core::*;
 use crate::error::Error;
 use std::fmt;
 use std::time::Duration;
-use usbapi::{ControlTransfer, UsbCore, ENDPOINT_IN, RECIPIENT_INTERFACE, REQUEST_TYPE_CLASS};
+use usbapi::{
+    BufferSlice, TimeoutMillis, UsbCore, UsbCoreDriver, ENDPOINT_IN, RECIPIENT_INTERFACE,
+    REQUEST_TYPE_CLASS,
+};
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
     AppIdle,
@@ -97,19 +100,18 @@ impl fmt::Display for Status {
 impl Status {
     pub fn get(usb: &mut UsbCore, _interface: u16) -> Result<Self, Error> {
         let mut s = Self::default();
-        let ctl = ControlTransfer::new_read(
-            ENDPOINT_IN | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
+        let ctl = usb.new_control_in(
+            REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
             DFU_GET_STATUS,
             0,
             0,
             6,
-            Duration::from_millis(3000),
-        );
+        )?;
         let data = usb
-            .control_async_wait(ctl)
+            .control_async_wait(ctl, TimeoutMillis::from(3000))
             .map_err(|e| Error::USB("Control transfer: DFU_GET_STATUS".into(), e))?;
 
-        let mut data = data.iter();
+        let mut data = data.buffer_from_raw().iter();
         if data.len() != 6 {
             return Err(Error::InvalidControlResponse(format!(
                 "Status length was {}",

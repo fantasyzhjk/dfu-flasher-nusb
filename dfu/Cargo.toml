@@ -1,6 +1,6 @@
 [package]
 name = "dfu"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Mikael <mike7b4@protonmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -11,8 +11,8 @@ readme = "readme.md"
 
 [dependencies]
 log = "0.4"
-nix = "0.18"
-usbapi = "0.3"
+nix = "0.20"
+usbapi = {version = "0.4"}
 
 [dependencies.serde]
 version = "1"
