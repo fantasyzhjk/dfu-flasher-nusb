@@ -16,4 +16,4 @@ structopt = "0.3"
 serde_json = "1"
 nix = "0.20"
 env_logger = "0.7"
-usbapi = {version = "0.4", features = ["serde"]}
+usbapi = {path="../../usbapi-rs", version = "0.4", features = ["serde"]}

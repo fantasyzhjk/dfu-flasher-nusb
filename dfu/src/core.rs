@@ -116,11 +116,21 @@ impl From<(UsbCore, MemoryLayout, u32, u32)> for Dfu {
 }
 
 impl Dfu {
-    pub fn from_bus_device(bus: u8, dev: u8, iface: u32, alt: u32) -> Result<Self, Error> {
+    pub fn from_bus_device(bus: u8, dev: u8, iface_index: u32, alt: u32) -> Result<Self, Error> {
         let mut usb =
             UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
-        let mem = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, 6)?)?;
-        Ok(Dfu::from((usb, mem, iface, alt)))
+
+        let iface = usb
+            .descriptors()
+            .as_ref()
+            .and_then(|dev| dev.device.configurations.get(iface_index as usize))
+            .and_then(|conf| conf.interfaces.get(iface_index as usize))
+            .map(|iface| iface.iinterface)
+            .ok_or_else(|| Error::DeviceNotFound("Missing configuration descriptor".to_string()))?;
+        log::debug!("iface id {:?}", iface);
+
+        let mem = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, iface)?)?;
+        Ok(Dfu::from((usb, mem, iface_index, alt)))
     }
 
     pub fn get_status(&mut self, mut retries: u8) -> Result<Status, Error> {
