@@ -1,10 +1,8 @@
 use crate::core::*;
 use crate::error::Error;
 use std::fmt;
-use std::time::Duration;
 use usbapi::{
-    BufferSlice, TimeoutMillis, UsbCore, UsbCoreDriver, ENDPOINT_IN, RECIPIENT_INTERFACE,
-    REQUEST_TYPE_CLASS,
+    BufferSlice, TimeoutMillis, UsbCore, UsbCoreDriver, RECIPIENT_INTERFACE, REQUEST_TYPE_CLASS,
 };
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
