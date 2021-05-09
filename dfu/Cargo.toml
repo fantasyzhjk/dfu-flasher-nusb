@@ -12,7 +12,7 @@ readme = "readme.md"
 [dependencies]
 log = "0.4"
 nix = "0.20"
-usbapi = {path = "../../usbapi-rs", version = "0.4"}
+usbapi = { version = "0.4"}
 
 [dependencies.serde]
 version = "1"
