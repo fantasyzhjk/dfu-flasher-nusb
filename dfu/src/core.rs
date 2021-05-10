@@ -5,6 +5,7 @@ use crate::status::{State, Status};
 use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{Read, Write};
+use std::slice::Iter;
 use std::str::FromStr;
 use std::time::Duration;
 use usbapi::*;
@@ -67,12 +68,35 @@ impl Iterator for Transaction {
     }
 }
 
+struct DfuDescriptor {
+    length: u8,
+    descriptor_type: u8,
+    attributes: u8,
+    detach_timeout: u16,
+    transfer_size: u16,
+    dfu_version: u8,
+}
+
+impl DfuDescriptor {
+    fn new(mut iter: Vec<u8>) -> Option<Self> {
+        let mut iter = iter.iter_mut();
+        Some(DfuDescriptor {
+            length: if *iter.next()? == 9 { 9 } else { return None },
+            descriptor_type: if *iter.next()? == 33 { 33 } else { return None },
+            attributes: *iter.next()?,
+            detach_timeout: *iter.next()? as u16 | (*iter.next()? as u16) << 8,
+            transfer_size: *iter.next()? as u16 | (*iter.next()? as u16) << 8,
+            dfu_version: *iter.next()?,
+        })
+    }
+}
+
 pub struct Dfu {
     usb: UsbCore,
     timeout: Duration,
     interface: u16,
-    xfer_size: u16,
     detached: bool,
+    dfu_descriptor: DfuDescriptor,
     mem_layout: MemoryLayout,
 }
 
@@ -95,31 +119,14 @@ impl Drop for Dfu {
     }
 }
 
-impl From<(UsbCore, MemoryLayout, u32, u32)> for Dfu {
-    fn from((mut usb, mem_layout, iface, alt): (UsbCore, MemoryLayout, u32, u32)) -> Self {
-        usb.claim_interface(iface).unwrap_or_else(|e| {
+impl Dfu {
+    fn setup(mut usb: UsbCore, iface_index: u32, alt: u32) -> Result<Self, Error> {
+        usb.claim_interface(iface_index).unwrap_or_else(|e| {
             log::error!("Claim interface failed with {}", e);
         });
-        usb.set_interface(iface, alt).unwrap_or_else(|e| {
+        usb.set_interface(iface_index, alt).unwrap_or_else(|e| {
             log::error!("Set interface failed with {}", e);
         });
-        let timeout = Duration::from_millis(3000);
-        Self {
-            usb,
-            timeout,
-            interface: 0,
-            xfer_size: 1024,
-            detached: false,
-            mem_layout,
-        }
-    }
-}
-
-impl Dfu {
-    pub fn from_bus_device(bus: u8, dev: u8, iface_index: u32, alt: u32) -> Result<Self, Error> {
-        let mut usb =
-            UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
-
         let iface = usb
             .descriptors()
             .as_ref()
@@ -128,9 +135,36 @@ impl Dfu {
             .map(|iface| iface.iinterface)
             .ok_or_else(|| Error::DeviceNotFound("Missing configuration descriptor".to_string()))?;
         log::debug!("iface id {:?}", iface);
+        let mem_layout = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, iface)?)?;
+        let dfu_descriptor = usb
+            .descriptors()
+            .as_ref()
+            .and_then(|dev| dev.device.configurations.get(iface_index as usize))
+            .and_then(|conf| conf.unknown_descriptors.get(0))
+            .and_then(|desc| DfuDescriptor::new(desc.clone()))
+            .ok_or_else(|| {
+                Error::DeviceNotFound("Missing configuration dfu transfer descriptor".to_string())
+            })?;
 
-        let mem = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, iface)?)?;
-        Ok(Dfu::from((usb, mem, iface_index, alt)))
+        log::debug!("Transfer size: {} bytes", dfu_descriptor.transfer_size);
+        let timeout = Duration::from_millis(3000);
+        Ok(Self {
+            usb,
+            timeout,
+            interface: 0,
+            dfu_descriptor,
+            detached: false,
+            mem_layout,
+        })
+    }
+
+    pub fn from_bus_device(bus: u8, dev: u8, iface_index: u32, alt: u32) -> Result<Self, Error> {
+        let mut usb =
+            UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
+
+        let mut dfu = Dfu::setup(usb, iface_index, alt)?;
+        dfu.abort_to_idle_clear_once()?;
+        Ok(dfu)
     }
 
     pub fn get_status(&mut self, mut retries: u8) -> Result<Status, Error> {
@@ -272,7 +306,7 @@ impl Dfu {
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
-        let mut t = Transaction::new(address, length, self.xfer_size);
+        let mut t = Transaction::new(address, length, self.dfu_descriptor.transfer_size);
         while t.xfer > 0 {
             let address = t.address;
             self.flash_read_chunk(&mut t, |v| {
@@ -341,16 +375,16 @@ impl Dfu {
         self.status_wait_for(0, Some(State::DfuIdle))?;
         let mut transaction = 2;
         let mut xfer;
-        if length >= self.xfer_size as u32 {
+        if length >= self.dfu_descriptor.transfer_size as u32 {
             panic!(
                 "FIXME write_flash_from_slice only allow xfer size max {}",
-                self.xfer_size
+                self.dfu_descriptor.transfer_size
             );
         }
         while length != 0 {
-            if length >= self.xfer_size as u32 {
-                xfer = self.xfer_size;
-                length -= self.xfer_size as u32;
+            if length >= self.dfu_descriptor.transfer_size as u32 {
+                xfer = self.dfu_descriptor.transfer_size;
+                length -= self.dfu_descriptor.transfer_size as u32;
             } else {
                 xfer = length as u16;
                 length = 0;
@@ -380,7 +414,7 @@ impl Dfu {
         self.status_wait_for(0, Some(State::DfuIdle))?;
         let mut len = 0;
         let size = buf.len();
-        let mut t = Transaction::new(address, size as u32, self.xfer_size);
+        let mut t = Transaction::new(address, size as u32, self.dfu_descriptor.transfer_size);
         while t.xfer > 0 {
             self.flash_read_chunk(&mut t, |v| {
                 for b in v {
@@ -400,11 +434,37 @@ impl Dfu {
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
-        let mut t = Transaction::new(address, length, self.xfer_size);
+        let mut t = Transaction::new(address, length, self.dfu_descriptor.transfer_size);
         while t.xfer > 0 {
             self.flash_read_chunk(&mut t, |v| Ok(file.write_all(&v)?))?;
         }
         self.abort_to_idle()?;
+        Ok(())
+    }
+
+    pub fn abort_to_idle_clear_once(&mut self) -> Result<(), Error> {
+        let s = self.get_status(0)?;
+        if s.state == u8::from(&State::DfuIdle) {
+            log::debug!("Status is {}", s.state);
+            return Ok(());
+        }
+        let ctl = self.usb.new_control_nodata(
+            ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
+            DFU_ABORT,
+            0,
+            self.interface,
+        )?;
+        self.usb
+            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
+            .map_err(|e| Error::USB("Abort to idle".into(), e))?;
+        let s = self.get_status(0)?;
+        // try clear and read again in case of wrong state
+        log::debug!("Status is after one abort {}", s.state);
+        if s.state != u8::from(&State::DfuIdle) {
+            self.clear_status()?;
+            log::debug!("Status cleared");
+            self.get_status(0)?;
+        }
         Ok(())
     }
 
@@ -461,9 +521,9 @@ impl Dfu {
         let mut transaction = 2;
         let mut xfer;
         while length != 0 {
-            if length >= self.xfer_size as u32 {
-                xfer = self.xfer_size;
-                length -= self.xfer_size as u32;
+            if length >= self.dfu_descriptor.transfer_size as u32 {
+                xfer = self.dfu_descriptor.transfer_size;
+                length -= self.dfu_descriptor.transfer_size as u32;
             } else {
                 xfer = length as u16;
                 length = 0;
