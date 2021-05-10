@@ -5,7 +5,6 @@ use crate::status::{State, Status};
 use std::convert::TryFrom;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::slice::Iter;
 use std::str::FromStr;
 use std::time::Duration;
 use usbapi::*;
@@ -68,21 +67,27 @@ impl Iterator for Transaction {
     }
 }
 
-struct DfuDescriptor {
-    length: u8,
-    descriptor_type: u8,
-    attributes: u8,
-    detach_timeout: u16,
-    transfer_size: u16,
-    dfu_version: u8,
+pub struct DfuDescriptor {
+    pub attributes: u8,
+    pub detach_timeout: u16,
+    pub transfer_size: u16,
+    pub dfu_version: u8,
 }
 
 impl DfuDescriptor {
     fn new(mut iter: Vec<u8>) -> Option<Self> {
         let mut iter = iter.iter_mut();
+        // length
+        if *iter.next()? != 9 {
+            return None;
+        }
+
+        // type
+        if *iter.next()? != 33 {
+            return None;
+        }
+
         Some(DfuDescriptor {
-            length: if *iter.next()? == 9 { 9 } else { return None },
-            descriptor_type: if *iter.next()? == 33 { 33 } else { return None },
             attributes: *iter.next()?,
             detach_timeout: *iter.next()? as u16 | (*iter.next()? as u16) << 8,
             transfer_size: *iter.next()? as u16 | (*iter.next()? as u16) << 8,
@@ -159,8 +164,7 @@ impl Dfu {
     }
 
     pub fn from_bus_device(bus: u8, dev: u8, iface_index: u32, alt: u32) -> Result<Self, Error> {
-        let mut usb =
-            UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
+        let usb = UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
 
         let mut dfu = Dfu::setup(usb, iface_index, alt)?;
         dfu.abort_to_idle_clear_once()?;
