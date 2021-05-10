@@ -1,6 +1,6 @@
 [package]
 name = "dfu-flasher"
-version = "0.4.2"
+version = "0.4.3"
 authors = ["mikael <mike7b4@protonmail.com>"]
 edition = "2018"
 license = "MIT"
