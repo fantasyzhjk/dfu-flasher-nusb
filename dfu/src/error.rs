@@ -8,7 +8,6 @@ pub enum Error {
     InvalidState(Status, State),
     InvalidStatus(Status, u8),
     USB(String, std::io::Error),
-    USBNix(String, nix::Error),
     FileIO(std::io::Error),
     UnknownCommandByte(u8),
     Address(u32),
@@ -29,7 +28,6 @@ impl From<Error> for i32 {
             DeviceNotFound(_) => 64,
             Argument(_) => 65,
             USB(_, _) => 66,
-            USBNix(_, _) => 67,
             InvalidControlResponse(_) => 68,
             InvalidState(_, _) => 69,
             InvalidStatus(_, _) => 70,
@@ -49,7 +47,6 @@ impl fmt::Display for Error {
             DeviceNotFound(d) => write!(f, "Device not found: {}", d),
             Argument(d) => write!(f, "Argument {}", d),
             USB(e, io) => write!(f, "USB {} failed cause {}", e, io),
-            USBNix(e, io) => write!(f, "USB {} failed cause {}", e, io),
             InvalidControlResponse(w) => write!(f, "Invalid control response on {}", w),
             InvalidState(s, expect) => write!(
                 f,

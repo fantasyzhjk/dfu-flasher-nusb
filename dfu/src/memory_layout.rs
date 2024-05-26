@@ -28,7 +28,7 @@ impl FromStr for MemoryLayout {
         let mut sp = s.split('/');
         let address = sp.nth(1).ok_or_else(|| Error::MemoryLayout(s.into()))?;
         let mut address =
-            u32::from_str_radix(&address, 16).map_err(|_| Error::MemoryLayout(s.into()))?;
+            u32::from_str_radix(address, 16).map_err(|_| Error::MemoryLayout(s.into()))?;
         let mut pages = Vec::new();
         for p in sp
             .next()

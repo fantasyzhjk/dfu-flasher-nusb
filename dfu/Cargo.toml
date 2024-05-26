@@ -1,6 +1,6 @@
 [package]
-name = "dfu"
-version = "0.4.3"
+name = "dfu-nusb"
+version = "0.4.4"
 authors = ["Mikael <mike7b4@protonmail.com>"]
 edition = "2018"
 license = "MIT"
@@ -11,10 +11,10 @@ readme = "readme.md"
 
 [dependencies]
 log = "0.4"
-nix = "0.20"
-usbapi = { version = "0.4"}
+nusb = "0.1.9"
+futures-lite = "2.3.0"
 
 [dependencies.serde]
 version = "1"
-features=["derive"]
+features = ["derive"]
 

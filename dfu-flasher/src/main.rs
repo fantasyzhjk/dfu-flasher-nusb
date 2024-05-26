@@ -1,11 +1,11 @@
 use dfu::core::Dfu;
 use dfu::error::Error;
 use dfu::status::State;
+use log::info;
 use std::fmt;
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
 use structopt::StructOpt;
-use usbapi::UsbEnumerate;
 
 fn parse_int(src: &str) -> Result<u32, std::num::ParseIntError> {
     let src = src.replace("_", "");
@@ -18,12 +18,11 @@ fn parse_int(src: &str) -> Result<u32, std::num::ParseIntError> {
 fn parse_address_and_length_as_some(
     dfuse_address: &str,
 ) -> Result<(u32, Option<u32>), std::num::ParseIntError> {
-    let address;
     let mut sp = dfuse_address.split(':');
     let a = sp.next().unwrap_or("0x0800_0000");
-    address = parse_int(a)?;
+    let address = parse_int(a)?;
     let length = if let Some(s) = sp.next() {
-        Some(parse_int(&s)?)
+        Some(parse_int(s)?)
     } else {
         None
     };
@@ -42,62 +41,44 @@ mod tests {
         assert_eq!(Ok(0x0010_0000), parse_int("0x00100000"));
         assert_eq!(Ok(10), parse_int("10"));
         assert_eq!(Ok(0x00B0_0000), parse_int("0x00B0_0000"));
-        assert_eq!(true, parse_int("0x00Z0_0000").is_err());
+        assert!(parse_int("0x00Z0_0000").is_err());
     }
 
     #[test]
     fn test_parse_address_and_length() {
         use crate::*;
-        assert_eq!(
-            true,
-            parse_address_and_length("0xFF00_0000")
-                .map(|(a, l)| {
-                    assert_eq!(0xFF00_0000, a);
-                    assert_eq!(0, l);
-                })
-                .is_ok()
-        );
-        assert_eq!(
-            true,
-            parse_address_and_length("0xFF00_0000:1024")
-                .map(|(a, l)| {
-                    assert_eq!(0xFF00_0000, a);
-                    assert_eq!(1024, l);
-                })
-                .is_ok()
-        );
-        assert_eq!(true, parse_address_and_length("0xFF00_0000:0x1000").is_ok());
-        assert_eq!(
-            true,
-            parse_address_and_length("0xZZ00_0000:0x1000").is_err()
-        );
+        assert!(parse_address_and_length("0xFF00_0000")
+            .map(|(a, l)| {
+                assert_eq!(0xFF00_0000, a);
+                assert_eq!(0, l);
+            })
+            .is_ok());
+        assert!(parse_address_and_length("0xFF00_0000:1024")
+            .map(|(a, l)| {
+                assert_eq!(0xFF00_0000, a);
+                assert_eq!(1024, l);
+            })
+            .is_ok());
+        assert!(parse_address_and_length("0xFF00_0000:0x1000").is_ok());
+        assert!(parse_address_and_length("0xZZ00_0000:0x1000").is_err());
     }
     #[test]
     fn test_parse_address_and_length_as_some() {
         use crate::*;
-        assert_eq!(
-            true,
-            parse_address_and_length_as_some("0xFF00_0000")
-                .map(|(a, l)| {
-                    assert_eq!(0xFF00_0000, a);
-                    assert_eq!(None, l);
-                })
-                .is_ok()
-        );
-        assert_eq!(
-            true,
-            parse_address_and_length_as_some("0xFF00_0000:1024")
-                .map(|(a, l)| {
-                    assert_eq!(0xFF00_0000, a);
-                    assert_eq!(Some(1024), l);
-                })
-                .is_ok()
-        );
-        assert_eq!(true, parse_address_and_length("0xFF00_0000:0x1000").is_ok());
-        assert_eq!(
-            true,
-            parse_address_and_length("0xZZ00_0000:0x1000").is_err()
-        );
+        assert!(parse_address_and_length_as_some("0xFF00_0000")
+            .map(|(a, l)| {
+                assert_eq!(0xFF00_0000, a);
+                assert_eq!(None, l);
+            })
+            .is_ok());
+        assert!(parse_address_and_length_as_some("0xFF00_0000:1024")
+            .map(|(a, l)| {
+                assert_eq!(0xFF00_0000, a);
+                assert_eq!(Some(1024), l);
+            })
+            .is_ok());
+        assert!(parse_address_and_length("0xFF00_0000:0x1000").is_ok());
+        assert!(parse_address_and_length("0xZZ00_0000:0x1000").is_err());
     }
 }
 
@@ -148,7 +129,6 @@ enum Action {
     Detach,
     SetAddress(STMResetArgs),
     MemoryLayout,
-    ShowDescriptors,
     ReadAddress(AddressArgs),
 }
 
@@ -182,7 +162,6 @@ impl fmt::Display for Action {
             SetAddress(a) => write!(f, "Set address 0x{:08X}", a.address),
             Detach => write!(f, "Detach"),
             MemoryLayout => write!(f, "Memory layout"),
-            ShowDescriptors => write!(f, "Show descriptors"),
             ReadAddress(a) => write!(f, "Read address 0x{:08X} length: {} bytes", a.address.0, a.address.1),
         }
     }
@@ -201,10 +180,10 @@ struct Args {
     bus_device: Option<String>,
     /// Specify the DFU interface
     #[structopt(short, long, default_value = "0")]
-    intf: u32,
+    intf: u8,
     /// Specify Alt setting of the DFU interface by number
     #[structopt(short, long, default_value = "0")]
-    alt: u32,
+    alt: u8,
     #[structopt(skip)]
     bus: u8,
     #[structopt(skip)]
@@ -232,26 +211,26 @@ impl Args {
             }
         } else if let Some(dp) = &args.bus_device {
             let mut dp = dp.split(':');
-            args.bus = u8::from_str_radix(dp.next().unwrap_or(""), 10).unwrap_or(0);
-            args.device = u8::from_str_radix(dp.next().unwrap_or(""), 10).unwrap_or(0);
+            args.bus = dp.next().unwrap_or("").parse::<u8>().unwrap_or(0);
+            args.device = dp.next().unwrap_or("").parse::<u8>().unwrap_or(0);
             if args.bus == 0 || args.device == 0 {
                 return Err(Error::Argument("expect bus:device".into()));
             }
         } else {
-            let e = UsbEnumerate::from_sysfs()?;
+            let e = nusb::list_devices()?;
             let mut msg =
                 String::from("Missing --bus-device or --dev! List of possible USB devices:\n\n");
-            for (bus, dev) in e
-                .devices()
-                .iter()
-                .filter(|(_, dev)| dev.device.id_product == 0xdf11)
-            {
-                let dev = &dev.device;
+            for (bus, dev) in e.filter(|dev| dev.product_id() == 0xdf11).map(|dev| {
+                (
+                    format!("{:04X}:{:04X}", dev.bus_number(), dev.device_address()),
+                    dev,
+                )
+            }) {
                 msg += &format!(
                     "--bus-device {} or -d {:04X}:{:04X}\n",
-                    bus.replace("-", ":"),
-                    dev.id_vendor,
-                    dev.id_product,
+                    bus,
+                    dev.vendor_id(),
+                    dev.product_id(),
                 );
             }
             return Err(Error::Argument(msg));
@@ -261,9 +240,34 @@ impl Args {
     }
 }
 
+fn get_length_from_file(file: &File, length: Option<u32>) -> Result<u32, Error> {
+    let file_length = file.metadata()?.len() as u32;
+    Ok(match length {
+        Some(length) => {
+            if file_length < length {
+                return Err(Error::Argument(format!(
+                    "error on '{:?}' is {} bytes, but length is set to {} bytes",
+                    file, file_length, length
+                )));
+            }
+            length
+        }
+        None => {
+            if file_length == 0 {
+                return Err(Error::Argument(format!("File '{:?}' is empty", file)));
+            }
+            file_length
+        }
+    })
+}
+
 fn run_main() -> Result<(), Error> {
     let args = Args::new()?;
-    let mut dfu = Dfu::from_bus_device(args.bus, args.device, args.intf, args.alt)?;
+    let mut dfu = if args.id_vendor != 0 && args.id_product != 0 {
+        Dfu::from_vid_pid(args.id_vendor, args.id_product, args.intf, args.alt)?
+    } else {
+        Dfu::from_bus_device(args.bus, args.device, args.intf, args.alt)?
+    };
     dfu.status_wait_for(0, Some(State::DfuIdle))?;
     log::info!("Execute action: {}", args.action);
     match args.action {
@@ -286,17 +290,18 @@ fn run_main() -> Result<(), Error> {
             a.address.0,
             a.address.1,
         ),
-        Action::Write(a) => dfu.download_raw(
-            &mut OpenOptions::new().read(true).open(a.file_name)?,
-            a.address.0,
-            a.address.1,
-        ),
-
-        Action::Verify(a) => dfu.verify(
-            &mut OpenOptions::new().read(true).open(a.file_name)?,
-            a.address.0,
-            a.address.1,
-        ),
+        Action::Write(a) => {
+            let f = &mut OpenOptions::new().read(true).open(a.file_name)?;
+            let len = get_length_from_file(f, a.address.1).unwrap();
+            dfu.download_raw(f, a.address.0, len)
+        }
+        Action::Verify(a) => {
+            let f = &mut OpenOptions::new().read(true).open(a.file_name)?;
+            let len = get_length_from_file(f, a.address.1).unwrap();
+            dfu.verify(f, a.address.0, len)?;
+            info!("Verify done");
+            Ok(())
+        }
         Action::EraseAll => dfu.mass_erase(),
         Action::Erase(a) => dfu.erase_pages(a.address.0, a.address.1),
         Action::Detach => dfu.detach(),
@@ -308,10 +313,10 @@ fn run_main() -> Result<(), Error> {
             //address += 16;
             for (i, b) in buf[0..len].iter().enumerate() {
                 if (i % 16) == 0 {
-                    println!();
                     print!("0x{:08X} ", address);
                     print!("{:02X}", b);
                     address += 16;
+                    println!();
                 } else {
                     print!(":{:02X}", b);
                 }
@@ -323,13 +328,6 @@ fn run_main() -> Result<(), Error> {
             println!(
                 "{}",
                 serde_json::to_string_pretty(&dfu.memory_layout().pages()).unwrap(),
-            );
-            Ok(())
-        }
-        Action::ShowDescriptors => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(dfu.descriptors()).unwrap()
             );
             Ok(())
         }

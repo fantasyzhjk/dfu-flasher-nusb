@@ -1,9 +1,10 @@
 use crate::core::*;
 use crate::error::Error;
 use std::fmt;
-use usbapi::{
-    BufferSlice, TimeoutMillis, UsbCore, UsbCoreDriver, RECIPIENT_INTERFACE, REQUEST_TYPE_CLASS,
-};
+use futures_lite::future::block_on;
+use nusb;
+use nusb::transfer::{ControlIn, ControlType, Recipient};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
     AppIdle,
@@ -96,32 +97,31 @@ impl fmt::Display for Status {
 }
 
 impl Status {
-    pub fn get(usb: &mut UsbCore, _interface: u16) -> Result<Self, Error> {
+    pub fn get(interface: &nusb::Interface) -> Result<Self, Error> {
         let mut s = Self::default();
-        let ctl = usb.new_control_in(
-            REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
-            DFU_GET_STATUS,
-            0,
-            0,
-            6,
-        )?;
-        let data = usb
-            .control_async_wait(ctl, TimeoutMillis::from(3000))
-            .map_err(|e| Error::USB("Control transfer: DFU_GET_STATUS".into(), e))?;
+        let data: Vec<u8> = block_on(interface.control_in(ControlIn {
+            control_type: ControlType::Class,
+            recipient: Recipient::Interface,
+            request: DFU_GET_STATUS,
+            value: 0,
+            index: 0,
+            length: 6,
+        })).into_result().map_err(|e| Error::USB("Control transfer: DFU_GET_STATUS".into(), e.into()))?;
 
-        let mut data = data.buffer_from_raw().iter();
+        let mut data = data.iter();
         if data.len() != 6 {
             return Err(Error::InvalidControlResponse(format!(
                 "Status length was {}",
                 data.len()
             )));
         }
-        s.status = *(data.next().unwrap_or(&(0 as u8)));
-        s.poll_timeout = ((*(data.next().unwrap_or(&(0 as u8))) as usize) << 16) as usize;
-        s.poll_timeout |= ((*(data.next().unwrap_or(&(0 as u8))) as usize) << 8) as usize;
-        s.poll_timeout |= (*(data.next().unwrap_or(&(0 as u8)))) as usize;
-        s.state = *(data.next().unwrap_or(&(0 as u8)));
-        s.string_index = *(data.next().unwrap_or(&(0 as u8)));
+        s.status = *(data.next().unwrap_or(&0_u8));
+        s.poll_timeout = ((*(data.next().unwrap_or(&0_u8)) as usize) << 16) as usize;
+        s.poll_timeout |= ((*(data.next().unwrap_or(&0_u8)) as usize) << 8) as usize;
+        s.poll_timeout |= (*(data.next().unwrap_or(&0_u8))) as usize;
+        s.state = *(data.next().unwrap_or(&0_u8));
+        s.string_index = *(data.next().unwrap_or(&0_u8));
+
         Ok(s)
     }
 }

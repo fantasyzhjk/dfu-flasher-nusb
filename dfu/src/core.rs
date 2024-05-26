@@ -7,7 +7,11 @@ use std::fs::File;
 use std::io::{Read, Write};
 use std::str::FromStr;
 use std::time::Duration;
-use usbapi::*;
+use futures_lite::future::block_on;
+use nusb;
+use nusb::descriptors::language_id::US_ENGLISH;
+use nusb::descriptors::Descriptor;
+use nusb::transfer::{ControlIn, ControlOut, ControlType, Recipient};
 #[allow(dead_code)]
 const DFU_DETACH: u8 = 0;
 const DFU_DNLOAD: u8 = 1;
@@ -75,8 +79,8 @@ pub struct DfuDescriptor {
 }
 
 impl DfuDescriptor {
-    fn new(mut iter: Vec<u8>) -> Option<Self> {
-        let mut iter = iter.iter_mut();
+    fn new(desc: Descriptor) -> Option<Self> {
+        let mut iter = desc.iter();
         // length
         if *iter.next()? != 9 {
             return None;
@@ -97,9 +101,8 @@ impl DfuDescriptor {
 }
 
 pub struct Dfu {
-    usb: UsbCore,
-    timeout: Duration,
-    interface: u16,
+    usb: nusb::Device,
+    interface: nusb::Interface,
     detached: bool,
     dfu_descriptor: DfuDescriptor,
     mem_layout: MemoryLayout,
@@ -116,55 +119,77 @@ impl Drop for Dfu {
                 log::warn!("Abort to idle failed {}", e);
             });
         }
-        self.usb
-            .release_interface(self.interface as u32)
-            .unwrap_or_else(|e| {
-                log::warn!("Release interface failed with {}", e);
-            });
+        // self.usb
+        //     .release_interface(self.interface as u32)
+        //     .unwrap_or_else(|e| {
+        //         log::warn!("Release interface failed with {}", e);
+        //     });
     }
 }
 
 impl Dfu {
-    fn setup(mut usb: UsbCore, iface_index: u32, alt: u32) -> Result<Self, Error> {
-        usb.claim_interface(iface_index).unwrap_or_else(|e| {
+    fn setup(usb: nusb::Device, iface_index: u8, alt_index: u8) -> Result<Self, Error> {
+        let interface = usb.claim_interface(iface_index).map_err(|e| {
             log::error!("Claim interface failed with {}", e);
-        });
-        usb.set_interface(iface_index, alt).unwrap_or_else(|e| {
-            log::error!("Set interface failed with {}", e);
-        });
-        let iface = usb
-            .descriptors()
-            .as_ref()
-            .and_then(|dev| dev.device.configurations.get(iface_index as usize))
-            .and_then(|conf| conf.interfaces.get(iface_index as usize))
-            .map(|iface| iface.iinterface)
-            .ok_or_else(|| Error::DeviceNotFound("Missing configuration descriptor".to_string()))?;
-        log::debug!("iface id {:?}", iface);
-        let mem_layout = MemoryLayout::from_str(&usb.get_descriptor_string_iface(0, iface)?)?;
-        let dfu_descriptor = usb
-            .descriptors()
-            .as_ref()
-            .and_then(|dev| dev.device.configurations.get(iface_index as usize))
-            .and_then(|conf| conf.unknown_descriptors.get(0))
-            .and_then(|desc| DfuDescriptor::new(desc.clone()))
-            .ok_or_else(|| {
-                Error::DeviceNotFound("Missing configuration dfu transfer descriptor".to_string())
-            })?;
+            Error::USB("Claim interface failed".into(), e)
+        })?;
+
+        let conf = usb.active_configuration().map_err(|_| {
+            Error::DeviceNotFound("Missing active configuration".to_string())
+        })?;
+
+        let alt = conf.interface_alt_settings().find(|s| {
+            s.interface_number() == iface_index && s.alternate_setting() == alt_index
+        }).ok_or_else(|| {
+            Error::DeviceNotFound("Missing configuration alt setting".to_string())
+        })?;
+
+        let mem_layout = MemoryLayout::from_str(
+            &alt.string_index().map(|i| usb.get_string_descriptor(i, US_ENGLISH, Duration::from_secs(1)).unwrap()).ok_or_else(|| {
+                Error::DeviceNotFound("Missing configuration descriptor".to_string())
+            })?
+        )?;
+        
+        let dfu_descriptor = conf.descriptors()
+        .find(|desc| desc.descriptor_type() == 33)
+        .map(|desc| DfuDescriptor::new(desc.clone())).ok_or_else(|| {
+            Error::DeviceNotFound("Missing configuration dfu transfer descriptor".to_string())
+        })?.unwrap();
+
+        interface.set_alt_setting(alt_index).unwrap();
 
         log::debug!("Transfer size: {} bytes", dfu_descriptor.transfer_size);
-        let timeout = Duration::from_millis(3000);
         Ok(Self {
             usb,
-            timeout,
-            interface: 0,
+            interface,
             dfu_descriptor,
             detached: false,
             mem_layout,
         })
     }
 
-    pub fn from_bus_device(bus: u8, dev: u8, iface_index: u32, alt: u32) -> Result<Self, Error> {
-        let usb = UsbCore::from_bus_device(bus, dev).map_err(|e| Error::USB("open".into(), e))?;
+    pub fn from_bus_device(bus: u8, dev_addr: u8, iface_index: u8, alt: u8) -> Result<Self, Error> {
+        
+        let device = nusb::list_devices()
+        .unwrap()
+        .find(|dev| dev.bus_number() == bus && dev.device_address() == dev_addr)
+        .expect("device not connected");
+
+        let usb = device.open().map_err(|e| Error::USB("open".into(), e))?;
+
+        let mut dfu = Dfu::setup(usb, iface_index, alt)?;
+        dfu.abort_to_idle_clear_once()?;
+        Ok(dfu)
+    }
+
+    pub fn from_vid_pid(vid: u16, pid: u16, iface_index: u8, alt: u8) -> Result<Self, Error> {
+        
+        let device = nusb::list_devices()
+        .unwrap()
+        .find(|dev| dev.vendor_id() == vid && dev.product_id() == pid)
+        .expect("device not connected");
+
+        let usb = device.open().map_err(|e| Error::USB("open".into(), e))?;
 
         let mut dfu = Dfu::setup(usb, iface_index, alt)?;
         dfu.abort_to_idle_clear_once()?;
@@ -176,7 +201,7 @@ impl Dfu {
         retries += 1;
         while retries > 0 {
             retries -= 1;
-            status = Status::get(&mut self.usb, self.interface);
+            status = Status::get(&self.interface);
             if let Err(e) = &status {
                 if let Error::USB(_, e) = e {
                     if e.kind() == std::io::ErrorKind::BrokenPipe {
@@ -197,32 +222,26 @@ impl Dfu {
     }
 
     pub fn clear_status(&mut self) -> Result<(), Error> {
-        let ctl = self.usb.new_control_nodata(
-            ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
-            DFU_CLRSTATUS,
-            0,
-            self.interface,
-        )?;
-        let _ = self
-            .usb
-            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
-            .map_err(|e| Error::USB("Control transfer".into(), e))?;
-
+        block_on(self.interface.control_out(ControlOut {
+            control_type: ControlType::Class,
+            recipient: Recipient::Interface,
+            request: DFU_CLRSTATUS,
+            value: 0,
+            index: self.interface.interface_number() as u16,
+            data: &[],
+        })).into_result().map_err(|e| Error::USB("Control transfer".into(), e.into()))?;
         Ok(())
     }
 
     pub fn detach(&mut self) -> Result<(), Error> {
-        let ctl = self.usb.new_control_nodata(
-            ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
-            DFU_DETACH,
-            0,
-            self.interface,
-        )?;
-        let _ = self
-            .usb
-            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
-            .map_err(|e| Error::USB("Detach".into(), e))?;
-
+        block_on(self.interface.control_out(ControlOut {
+            control_type: ControlType::Class,
+            recipient: Recipient::Interface,
+            request: DFU_DETACH,
+            value: 0,
+            index: self.interface.interface_number() as u16,
+            data: &[],
+        })).into_result().map_err(|e| Error::USB("Detach".into(), e.into()))?;
         Ok(())
     }
 
@@ -303,9 +322,8 @@ impl Dfu {
         &mut self,
         file: &mut File,
         address: u32,
-        length: Option<u32>,
+        length: u32,
     ) -> Result<(), Error> {
-        let length = Self::get_length_from_file(file, length)?;
         self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
         self.status_wait_for(0, None)?;
         self.abort_to_idle()?;
@@ -452,15 +470,16 @@ impl Dfu {
             log::debug!("Status is {}", s.state);
             return Ok(());
         }
-        let ctl = self.usb.new_control_nodata(
-            ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
-            DFU_ABORT,
-            0,
-            self.interface,
-        )?;
-        self.usb
-            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
-            .map_err(|e| Error::USB("Abort to idle".into(), e))?;
+
+        block_on(self.interface.control_out(ControlOut {
+            control_type: ControlType::Class,
+            recipient: Recipient::Interface,
+            request: DFU_ABORT,
+            value: 0,
+            index: self.interface.interface_number() as u16,
+            data: &[],
+        })).into_result().map_err(|e| Error::USB("Abort to idle".into(), e.into()))?;
+    
         let s = self.get_status(0)?;
         // try clear and read again in case of wrong state
         log::debug!("Status is after one abort {}", s.state);
@@ -473,41 +492,20 @@ impl Dfu {
     }
 
     pub fn abort_to_idle(&mut self) -> Result<(), Error> {
-        let ctl = self.usb.new_control_nodata(
-            ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
-            DFU_ABORT,
-            0,
-            self.interface,
-        )?;
-        self.usb
-            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
-            .map_err(|e| Error::USB("Abort to idle".into(), e))?;
+        block_on(self.interface.control_out(ControlOut {
+            control_type: ControlType::Class,
+            recipient: Recipient::Interface,
+            request: DFU_ABORT,
+            value: 0,
+            index: self.interface.interface_number() as u16,
+            data: &[],
+        })).into_result().map_err(|e| Error::USB("Abort to idle".into(), e.into()))?;
+
         let s = self.get_status(0)?;
         if s.state != u8::from(&State::DfuIdle) {
             return Err(Error::InvalidState(s, State::DfuIdle));
         }
         Ok(())
-    }
-
-    fn get_length_from_file(file: &File, length: Option<u32>) -> Result<u32, Error> {
-        let file_length = file.metadata()?.len() as u32;
-        Ok(match length {
-            Some(length) => {
-                if file_length < length {
-                    return Err(Error::Argument(format!(
-                        "error on '{:?}' is {} bytes, but length is set to {} bytes",
-                        file, file_length, length
-                    )));
-                }
-                length
-            }
-            None => {
-                if file_length == 0 {
-                    return Err(Error::Argument(format!("File '{:?}' is empty", file)));
-                }
-                file_length
-            }
-        })
     }
 
     /// Download file to device using raw mode.
@@ -516,9 +514,8 @@ impl Dfu {
         &mut self,
         file: &mut File,
         address: u32,
-        length: Option<u32>,
+        mut length: u32,
     ) -> Result<(), Error> {
-        let mut length = Self::get_length_from_file(file, length)?;
         self.erase_pages(address, length)?;
         self.abort_to_idle()?;
         self.status_wait_for(0, Some(State::DfuIdle))?;
@@ -553,53 +550,55 @@ impl Dfu {
     }
 
     fn dfuse_download(&mut self, buf: Vec<u8>, transaction: u16) -> Result<(), Error> {
-        let ctl = self.usb.new_control_out(
-            ENDPOINT_OUT | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
-            DFU_DNLOAD,
-            transaction,
-            self.interface,
-            &buf,
-        )?;
-        match self
-            .usb
-            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
+        let res = block_on(self.interface.control_out(ControlOut {
+            control_type: ControlType::Class,
+            recipient: Recipient::Interface,
+            request: DFU_DNLOAD,
+            value: transaction,
+            index: self.interface.interface_number() as u16,
+            data: &buf,
+        })).into_result();
+
+        match res
         {
-            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                log::warn!("stalled on transaction {}", transaction);
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                Ok(())
+            Err(e) => {
+                match e {
+                    nusb::transfer::TransferError::Stall => {
+                        log::warn!("stalled on transaction {}", transaction);
+                        self.abort_to_idle()?;
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        Ok(())
+                    }
+                    _ => Err(Error::USB("Dfuse download".into(), e.into())),
+                }
             }
-            Err(e) => Err(Error::USB("Dfuse download".into(), e)),
             Ok(_) => Ok(()),
         }
     }
 
-    pub fn descriptors(&mut self) -> &Option<UsbDevice> {
-        self.usb.descriptors()
-    }
 
     pub fn memory_layout(&self) -> &MemoryLayout {
         &self.mem_layout
     }
 
     fn dfuse_upload(&mut self, transaction: u16, xfer: u16) -> Result<Vec<u8>, Error> {
-        let ctl = self.usb.new_control_in(
-            ENDPOINT_IN | REQUEST_TYPE_CLASS | RECIPIENT_INTERFACE,
-            DFU_UPLOAD,
-            transaction,
-            self.interface,
-            xfer,
-        )?;
-        match self
-            .usb
-            .control_async_wait(ctl, TimeoutMillis::from(self.timeout))
+        let res = block_on(self.interface.control_in(ControlIn {
+            control_type: ControlType::Class,
+            recipient: Recipient::Interface,
+            request: DFU_UPLOAD,
+            value: transaction,
+            index: self.interface.interface_number() as u16,
+            length: xfer,
+        })).into_result();
+
+        match res
         {
-            Err(e) => Err(Error::USB("Dfuse upload".into(), e)),
-            Ok(buf) => Ok(buf.buffer_from_raw().to_vec()),
+            Err(e) => Err(Error::USB("Dfuse upload".into(), e.into())),
+            Ok(buf) => Ok(buf),
         }
     }
 
-    pub fn usb(&mut self) -> &mut UsbCore {
+    pub fn usb(&mut self) -> &mut nusb::Device {
         &mut self.usb
     }
 }
