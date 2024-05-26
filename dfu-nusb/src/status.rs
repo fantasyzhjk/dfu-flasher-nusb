@@ -1,7 +1,6 @@
 use crate::core::*;
 use crate::error::Error;
 use std::fmt;
-use futures_lite::future::block_on;
 use nusb;
 use nusb::transfer::{ControlIn, ControlType, Recipient};
 
@@ -97,16 +96,16 @@ impl fmt::Display for Status {
 }
 
 impl Status {
-    pub fn get(interface: &nusb::Interface) -> Result<Self, Error> {
+    pub async fn get(interface: &nusb::Interface) -> Result<Self, Error> {
         let mut s = Self::default();
-        let data: Vec<u8> = block_on(interface.control_in(ControlIn {
+        let data: Vec<u8> = interface.control_in(ControlIn {
             control_type: ControlType::Class,
             recipient: Recipient::Interface,
             request: DFU_GET_STATUS,
             value: 0,
             index: 0,
             length: 6,
-        })).into_result().map_err(|e| Error::USB("Control transfer: DFU_GET_STATUS".into(), e.into()))?;
+        }).await.into_result().map_err(|e| Error::USB("Control transfer: DFU_GET_STATUS".into(), e.into()))?;
 
         let mut data = data.iter();
         if data.len() != 6 {

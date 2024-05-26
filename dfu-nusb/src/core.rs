@@ -113,9 +113,9 @@ impl Drop for Dfu {
         if self.detached {
             return;
         }
-        if self.status_wait_for(0, Some(State::DfuIdle)).is_err() {
+        if block_on(self.status_wait_for(0, Some(State::DfuIdle))).is_err() {
             log::debug!("Dfu was not idle abort to idle");
-            self.abort_to_idle().unwrap_or_else(|e| {
+            block_on(self.abort_to_idle()).unwrap_or_else(|e| {
                 log::warn!("Abort to idle failed {}", e);
             });
         }
@@ -168,7 +168,7 @@ impl Dfu {
         })
     }
 
-    pub fn from_bus_device(bus: u8, dev_addr: u8, iface_index: u8, alt: u8) -> Result<Self, Error> {
+    pub async fn from_bus_device(bus: u8, dev_addr: u8, iface_index: u8, alt: u8) -> Result<Self, Error> {
         
         let device = nusb::list_devices()
         .unwrap()
@@ -178,11 +178,11 @@ impl Dfu {
         let usb = device.open().map_err(|e| Error::USB("open".into(), e))?;
 
         let mut dfu = Dfu::setup(usb, iface_index, alt)?;
-        dfu.abort_to_idle_clear_once()?;
+        dfu.abort_to_idle_clear_once().await?;
         Ok(dfu)
     }
 
-    pub fn from_vid_pid(vid: u16, pid: u16, iface_index: u8, alt: u8) -> Result<Self, Error> {
+    pub async fn from_vid_pid(vid: u16, pid: u16, iface_index: u8, alt: u8) -> Result<Self, Error> {
         
         let device = nusb::list_devices()
         .unwrap()
@@ -192,26 +192,26 @@ impl Dfu {
         let usb = device.open().map_err(|e| Error::USB("open".into(), e))?;
 
         let mut dfu = Dfu::setup(usb, iface_index, alt)?;
-        dfu.abort_to_idle_clear_once()?;
+        dfu.abort_to_idle_clear_once().await?;
         Ok(dfu)
     }
 
-    pub fn get_status(&mut self, mut retries: u8) -> Result<Status, Error> {
+    pub async fn get_status(&mut self, mut retries: u8) -> Result<Status, Error> {
         let mut status = Err(Error::Argument("Get status retries failed".into()));
         retries += 1;
         while retries > 0 {
             retries -= 1;
-            status = Status::get(&self.interface);
+            status = Status::get(&self.interface).await;
             if let Err(e) = &status {
                 if let Error::USB(_, e) = e {
                     if e.kind() == std::io::ErrorKind::BrokenPipe {
                         log::warn!("Epipe try again");
-                        std::thread::sleep(std::time::Duration::from_millis(3000));
+                        tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
                         continue;
                     }
                 } else if let Error::InvalidControlResponse(e) = e {
                     log::warn!("retries {} Get status error cause '{}'", retries, e);
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     continue;
                 }
             } else {
@@ -221,31 +221,31 @@ impl Dfu {
         status
     }
 
-    pub fn clear_status(&mut self) -> Result<(), Error> {
-        block_on(self.interface.control_out(ControlOut {
+    pub async fn clear_status(&mut self) -> Result<(), Error> {
+        self.interface.control_out(ControlOut {
             control_type: ControlType::Class,
             recipient: Recipient::Interface,
             request: DFU_CLRSTATUS,
             value: 0,
             index: self.interface.interface_number() as u16,
             data: &[],
-        })).into_result().map_err(|e| Error::USB("Control transfer".into(), e.into()))?;
+        }).await.into_result().map_err(|e| Error::USB("Control transfer".into(), e.into()))?;
         Ok(())
     }
 
-    pub fn detach(&mut self) -> Result<(), Error> {
-        block_on(self.interface.control_out(ControlOut {
+    pub async fn detach(&mut self) -> Result<(), Error> {
+        self.interface.control_out(ControlOut {
             control_type: ControlType::Class,
             recipient: Recipient::Interface,
             request: DFU_DETACH,
             value: 0,
             index: self.interface.interface_number() as u16,
             data: &[],
-        })).into_result().map_err(|e| Error::USB("Detach".into(), e.into()))?;
+        }).await.into_result().map_err(|e| Error::USB("Detach".into(), e.into()))?;
         Ok(())
     }
 
-    pub fn status_wait_for(
+    pub async fn status_wait_for(
         &mut self,
         mut retries: u8,
         wait_for_state: Option<State>,
@@ -256,14 +256,14 @@ impl Dfu {
         } else {
             State::DfuDownloadBusy
         };
-        let mut s = self.get_status(10)?;
+        let mut s = self.get_status(10).await?;
         while retries > 0 {
             if s.state == u8::from(&wait_for_state) {
                 break;
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
             retries -= 1;
-            s = self.get_status(10)?;
+            s = self.get_status(10).await?;
         }
 
         // check if expected state and return fail if not
@@ -277,21 +277,21 @@ impl Dfu {
         Ok(s)
     }
 
-    pub fn set_address(&mut self, address: u32) -> Result<(), Error> {
-        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
-        self.status_wait_for(0, Some(State::DfuDownloadIdle))?;
+    pub async fn set_address(&mut self, address: u32) -> Result<(), Error> {
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0).await?;
+        self.status_wait_for(0, Some(State::DfuDownloadIdle)).await?;
         Ok(())
     }
 
-    pub fn reset_stm32(&mut self, address: u32) -> Result<(), Error> {
+    pub async fn reset_stm32(&mut self, address: u32) -> Result<(), Error> {
         //self.abort_to_idle()?;
-        self.set_address(address)?;
+        self.set_address(address).await?;
         log::debug!("set done");
         //        self.abort_to_idle()?;
         //       log::debug!("abort done");
-        self.dfuse_download(Vec::new(), 2)?;
+        self.dfuse_download(Vec::new(), 2).await?;
         log::debug!("dfuse None, 2 done");
-        self.get_status(0).unwrap_or_else(|e| {
+        self.get_status(0).await.unwrap_or_else(|e| {
             log::warn!("get_status failed cause {}", e);
             Status::default()
         });
@@ -299,10 +299,10 @@ impl Dfu {
         Ok(())
     }
 
-    pub fn dfuse_get_commands(&mut self) -> Result<Vec<DfuseCommand>, Error> {
-        self.abort_to_idle()?;
+    pub async fn dfuse_get_commands(&mut self) -> Result<Vec<DfuseCommand>, Error> {
+        self.abort_to_idle().await?;
         let mut v = Vec::new();
-        let cmds = &self.dfuse_upload(0, 1024)?;
+        let cmds = &self.dfuse_upload(0, 1024).await?;
         if let Some(cmd) = cmds.iter().next() {
             if *cmd != 0 {
                 return Err(Error::InvalidControlResponse(format!(
@@ -318,16 +318,16 @@ impl Dfu {
     }
 
     /// Verify flash using file
-    pub fn verify(
+    pub async fn verify(
         &mut self,
         file: &mut File,
         address: u32,
         length: u32,
     ) -> Result<(), Error> {
-        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
-        self.status_wait_for(0, None)?;
-        self.abort_to_idle()?;
-        self.status_wait_for(0, Some(State::DfuIdle))?;
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0).await?;
+        self.status_wait_for(0, None).await?;
+        self.abort_to_idle().await?;
+        self.status_wait_for(0, Some(State::DfuIdle)).await?;
         let mut t = Transaction::new(address, length, self.dfu_descriptor.transfer_size);
         while t.xfer > 0 {
             let address = t.address;
@@ -347,23 +347,23 @@ impl Dfu {
                     return Err(Error::Verify(address + v.len() as u32));
                 }
                 Ok(())
-            })?;
+            }).await?;
         }
-        self.abort_to_idle()?;
+        self.abort_to_idle().await?;
         Ok(())
     }
 
     /// Erase pages from start address + length
-    pub fn erase_pages(&mut self, mut address: u32, length: u32) -> Result<(), Error> {
-        self.status_wait_for(0, Some(State::DfuIdle))?;
+    pub async fn erase_pages(&mut self, mut address: u32, length: u32) -> Result<(), Error> {
+        self.status_wait_for(0, Some(State::DfuIdle)).await?;
         let mut pages = self.mem_layout.num_pages(address, length)?;
         let page = self.mem_layout.address(address)?;
         // realign to beginning of page
         address = page.address;
         while pages > 0 {
-            self.dfuse_download(Vec::from(DfuseCommand::ErasePage(address)), 0)?;
-            self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
-            self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
+            self.dfuse_download(Vec::from(DfuseCommand::ErasePage(address)), 0).await?;
+            self.status_wait_for(0, Some(State::DfuDownloadBusy)).await?;
+            self.status_wait_for(100, Some(State::DfuDownloadIdle)).await?;
             pages -= 1;
             address += page.size;
         }
@@ -371,30 +371,30 @@ impl Dfu {
     }
 
     /// Do mass erase of flash
-    pub fn mass_erase(&mut self) -> Result<(), Error> {
-        self.status_wait_for(0, Some(State::DfuIdle))?;
-        self.dfuse_download(Vec::from(DfuseCommand::MassErase), 0)?;
-        self.status_wait_for(0, Some(State::DfuDownloadBusy))?;
-        self.status_wait_for(10, Some(State::DfuDownloadIdle))?;
+    pub async fn mass_erase(&mut self) -> Result<(), Error> {
+        self.status_wait_for(0, Some(State::DfuIdle)).await?;
+        self.dfuse_download(Vec::from(DfuseCommand::MassErase), 0).await?;
+        self.status_wait_for(0, Some(State::DfuDownloadBusy)).await?;
+        self.status_wait_for(10, Some(State::DfuDownloadIdle)).await?;
         Ok(())
     }
 
-    fn flash_read_chunk<F>(&mut self, t: &mut Transaction, mut f: F) -> Result<(), Error>
+    async fn flash_read_chunk<F>(&mut self, t: &mut Transaction, mut f: F) -> Result<(), Error>
     where
         F: FnMut(Vec<u8>) -> Result<(), Error>,
     {
         log::debug!("{:X?}", t);
-        let v = self.dfuse_upload(t.transaction, t.xfer)?;
+        let v = self.dfuse_upload(t.transaction, t.xfer).await?;
         f(v)?;
         let _ = t.next().is_some();
         Ok(())
     }
 
-    pub fn write_flash_from_slice(&mut self, address: u32, buf: &[u8]) -> Result<usize, Error> {
+    pub async fn write_flash_from_slice(&mut self, address: u32, buf: &[u8]) -> Result<usize, Error> {
         let mut length = buf.len() as u32;
-        self.erase_pages(address, length)?;
-        self.abort_to_idle()?;
-        self.status_wait_for(0, Some(State::DfuIdle))?;
+        self.erase_pages(address, length).await?;
+        self.abort_to_idle().await?;
+        self.status_wait_for(0, Some(State::DfuIdle)).await?;
         let mut transaction = 2;
         let mut xfer;
         if length >= self.dfu_descriptor.transfer_size as u32 {
@@ -418,22 +418,22 @@ impl Dfu {
                 xfer,
                 length
             );
-            self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
-            self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
-            self.dfuse_download(buf.into(), transaction)?;
-            self.status_wait_for(100, Some(State::DfuDownloadBusy))?;
-            self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
+            self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0).await?;
+            self.status_wait_for(100, Some(State::DfuDownloadIdle)).await?;
+            self.dfuse_download(buf.into(), transaction).await?;
+            self.status_wait_for(100, Some(State::DfuDownloadBusy)).await?;
+            self.status_wait_for(100, Some(State::DfuDownloadIdle)).await?;
             transaction += 1;
         }
-        self.abort_to_idle()?;
+        self.abort_to_idle().await?;
         Ok(length as usize)
     }
 
-    pub fn read_flash_to_slice(&mut self, address: u32, buf: &mut [u8]) -> Result<usize, Error> {
-        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
-        self.status_wait_for(0, None)?;
-        self.abort_to_idle()?;
-        self.status_wait_for(0, Some(State::DfuIdle))?;
+    pub async fn read_flash_to_slice(&mut self, address: u32, buf: &mut [u8]) -> Result<usize, Error> {
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0).await?;
+        self.status_wait_for(0, None).await?;
+        self.abort_to_idle().await?;
+        self.status_wait_for(0, Some(State::DfuIdle)).await?;
         let mut len = 0;
         let size = buf.len();
         let mut t = Transaction::new(address, size as u32, self.dfu_descriptor.transfer_size);
@@ -444,64 +444,64 @@ impl Dfu {
                     len += 1;
                 }
                 Ok(())
-            })?;
+            }).await?;
         }
-        self.abort_to_idle()?;
+        self.abort_to_idle().await?;
         Ok(len)
     }
 
     /// Upload read flash and store it in file.
-    pub fn upload(&mut self, file: &mut File, address: u32, length: u32) -> Result<(), Error> {
-        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
-        self.status_wait_for(0, None)?;
-        self.abort_to_idle()?;
-        self.status_wait_for(0, Some(State::DfuIdle))?;
+    pub async fn upload(&mut self, file: &mut File, address: u32, length: u32) -> Result<(), Error> {
+        self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0).await?;
+        self.status_wait_for(0, None).await?;
+        self.abort_to_idle().await?;
+        self.status_wait_for(0, Some(State::DfuIdle)).await?;
         let mut t = Transaction::new(address, length, self.dfu_descriptor.transfer_size);
         while t.xfer > 0 {
-            self.flash_read_chunk(&mut t, |v| Ok(file.write_all(&v)?))?;
+            self.flash_read_chunk(&mut t, |v| Ok(file.write_all(&v)?)).await?;
         }
-        self.abort_to_idle()?;
+        self.abort_to_idle().await?;
         Ok(())
     }
 
-    pub fn abort_to_idle_clear_once(&mut self) -> Result<(), Error> {
-        let s = self.get_status(0)?;
+    pub async fn abort_to_idle_clear_once(&mut self) -> Result<(), Error> {
+        let s = self.get_status(0).await?;
         if s.state == u8::from(&State::DfuIdle) {
             log::debug!("Status is {}", s.state);
             return Ok(());
         }
 
-        block_on(self.interface.control_out(ControlOut {
+        self.interface.control_out(ControlOut {
             control_type: ControlType::Class,
             recipient: Recipient::Interface,
             request: DFU_ABORT,
             value: 0,
             index: self.interface.interface_number() as u16,
             data: &[],
-        })).into_result().map_err(|e| Error::USB("Abort to idle".into(), e.into()))?;
+        }).await.into_result().map_err(|e| Error::USB("Abort to idle".into(), e.into()))?;
     
-        let s = self.get_status(0)?;
+        let s = self.get_status(0).await?;
         // try clear and read again in case of wrong state
         log::debug!("Status is after one abort {}", s.state);
         if s.state != u8::from(&State::DfuIdle) {
-            self.clear_status()?;
+            self.clear_status().await?;
             log::debug!("Status cleared");
-            self.get_status(0)?;
+            self.get_status(0).await?;
         }
         Ok(())
     }
 
-    pub fn abort_to_idle(&mut self) -> Result<(), Error> {
-        block_on(self.interface.control_out(ControlOut {
+    pub async fn abort_to_idle(&mut self) -> Result<(), Error> {
+        self.interface.control_out(ControlOut {
             control_type: ControlType::Class,
             recipient: Recipient::Interface,
             request: DFU_ABORT,
             value: 0,
             index: self.interface.interface_number() as u16,
             data: &[],
-        })).into_result().map_err(|e| Error::USB("Abort to idle".into(), e.into()))?;
+        }).await.into_result().map_err(|e| Error::USB("Abort to idle".into(), e.into()))?;
 
-        let s = self.get_status(0)?;
+        let s = self.get_status(0).await?;
         if s.state != u8::from(&State::DfuIdle) {
             return Err(Error::InvalidState(s, State::DfuIdle));
         }
@@ -510,15 +510,15 @@ impl Dfu {
 
     /// Download file to device using raw mode.
     /// If length is None it will read to file end.
-    pub fn download_raw(
+    pub async fn download_raw(
         &mut self,
         file: &mut File,
         address: u32,
         mut length: u32,
     ) -> Result<(), Error> {
-        self.erase_pages(address, length)?;
-        self.abort_to_idle()?;
-        self.status_wait_for(0, Some(State::DfuIdle))?;
+        self.erase_pages(address, length).await?;
+        self.abort_to_idle().await?;
+        self.status_wait_for(0, Some(State::DfuIdle)).await?;
         let mut transaction = 2;
         let mut xfer;
         while length != 0 {
@@ -538,26 +538,26 @@ impl Dfu {
             );
             let mut buf = vec![0; xfer as usize];
             file.read_exact(&mut buf)?;
-            self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0)?;
-            self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
-            self.dfuse_download(buf, transaction)?;
-            self.status_wait_for(100, Some(State::DfuDownloadBusy))?;
-            self.status_wait_for(100, Some(State::DfuDownloadIdle))?;
+            self.dfuse_download(Vec::from(DfuseCommand::SetAddress(address)), 0).await?;
+            self.status_wait_for(100, Some(State::DfuDownloadIdle)).await?;
+            self.dfuse_download(buf, transaction).await?;
+            self.status_wait_for(100, Some(State::DfuDownloadBusy)).await?;
+            self.status_wait_for(100, Some(State::DfuDownloadIdle)).await?;
             transaction += 1;
         }
-        self.abort_to_idle()?;
+        self.abort_to_idle().await?;
         Ok(())
     }
 
-    fn dfuse_download(&mut self, buf: Vec<u8>, transaction: u16) -> Result<(), Error> {
-        let res = block_on(self.interface.control_out(ControlOut {
+    async fn dfuse_download(&mut self, buf: Vec<u8>, transaction: u16) -> Result<(), Error> {
+        let res = self.interface.control_out(ControlOut {
             control_type: ControlType::Class,
             recipient: Recipient::Interface,
             request: DFU_DNLOAD,
             value: transaction,
             index: self.interface.interface_number() as u16,
             data: &buf,
-        })).into_result();
+        }).await.into_result();
 
         match res
         {
@@ -565,8 +565,8 @@ impl Dfu {
                 match e {
                     nusb::transfer::TransferError::Stall => {
                         log::warn!("stalled on transaction {}", transaction);
-                        self.abort_to_idle()?;
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        self.abort_to_idle().await?;
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                         Ok(())
                     }
                     _ => Err(Error::USB("Dfuse download".into(), e.into())),
@@ -581,15 +581,15 @@ impl Dfu {
         &self.mem_layout
     }
 
-    fn dfuse_upload(&mut self, transaction: u16, xfer: u16) -> Result<Vec<u8>, Error> {
-        let res = block_on(self.interface.control_in(ControlIn {
+    async fn dfuse_upload(&mut self, transaction: u16, xfer: u16) -> Result<Vec<u8>, Error> {
+        let res = self.interface.control_in(ControlIn {
             control_type: ControlType::Class,
             recipient: Recipient::Interface,
             request: DFU_UPLOAD,
             value: transaction,
             index: self.interface.interface_number() as u16,
             length: xfer,
-        })).into_result();
+        }).await.into_result();
 
         match res
         {

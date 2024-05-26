@@ -262,25 +262,25 @@ fn get_length_from_file(file: &File, length: Option<u32>) -> Result<u32, Error> 
     })
 }
 
-fn run_main() -> Result<(), Error> {
+async fn run_main() -> Result<(), Error> {
     let args = Args::new()?;
     let mut dfu = if args.id_vendor != 0 && args.id_product != 0 {
-        Dfu::from_vid_pid(args.id_vendor, args.id_product, args.intf, args.alt)?
+        Dfu::from_vid_pid(args.id_vendor, args.id_product, args.intf, args.alt).await?
     } else {
-        Dfu::from_bus_device(args.bus, args.device, args.intf, args.alt)?
+        Dfu::from_bus_device(args.bus, args.device, args.intf, args.alt).await?
     };
-    dfu.status_wait_for(0, Some(State::DfuIdle))?;
+    dfu.status_wait_for(0, Some(State::DfuIdle)).await?;
     log::info!("Execute action: {}", args.action);
     match args.action {
         Action::SupportedCommands => {
-            let supported_cmds = dfu.dfuse_get_commands()?;
+            let supported_cmds = dfu.dfuse_get_commands().await?;
             println!("Supported commands:");
             for cmd in supported_cmds {
                 println!("{}", cmd);
             }
             Ok(())
         }
-        Action::Reset(a) => dfu.reset_stm32(a.address),
+        Action::Reset(a) => dfu.reset_stm32(a.address).await,
         Action::Read(a) => dfu.upload(
             &mut OpenOptions::new()
                 .write(true)
@@ -290,32 +290,32 @@ fn run_main() -> Result<(), Error> {
                 .open(a.file_name)?,
             a.address.0,
             a.address.1,
-        ),
+        ).await,
         Action::Write(a) => {
             let f = &mut OpenOptions::new().read(true).open(a.file_name)?;
             let len = get_length_from_file(f, a.address.1).unwrap();
-            dfu.download_raw(f, a.address.0, len)
+            dfu.download_raw(f, a.address.0, len).await
         }
         Action::Verify(a) => {
             let f = &mut OpenOptions::new().read(true).open(a.file_name)?;
             let len = get_length_from_file(f, a.address.1).unwrap();
-            dfu.verify(f, a.address.0, len)?;
+            dfu.verify(f, a.address.0, len).await?;
             info!("Verify done");
             Ok(())
         }
-        Action::EraseAll => dfu.mass_erase(),
-        Action::Erase(a) => dfu.erase_pages(a.address.0, a.address.1),
-        Action::Detach => dfu.detach(),
+        Action::EraseAll => dfu.mass_erase().await,
+        Action::Erase(a) => dfu.erase_pages(a.address.0, a.address.1).await,
+        Action::Detach => dfu.detach().await,
         Action::ReadAddress(a) => {
             let mut buf = vec![0; a.address.1 as usize];
-            let len = dfu.read_flash_to_slice(a.address.0, &mut buf)?;
+            let len = dfu.read_flash_to_slice(a.address.0, &mut buf).await?;
             // let mut address = a.address.0;
             //print!("0x{:08X} ", address);
             //address += 16;
             println!("{:?}", buf[0..len].hex_dump());
             Ok(())
         }
-        Action::SetAddress(a) => dfu.set_address(a.address),
+        Action::SetAddress(a) => dfu.set_address(a.address).await,
         Action::MemoryLayout => {
             dfu.memory_layout().pages().iter().for_each(|p| {
                 println!("Start: 0x{:08X} Size: {} bytes", p.address, p.size)
@@ -342,8 +342,9 @@ fn env_logger_init(_appname: &str, verbose: usize) {
     }
 }
 
-fn main() {
-    if let Err(err) = run_main() {
+#[tokio::main]
+async fn main() {
+    if let Err(err) = run_main().await {
         log::error!("{}", err);
         std::process::exit(i32::from(err));
     }
