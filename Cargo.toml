@@ -1,2 +1,3 @@
 [workspace]
-members = ["dfu-flasher", "dfu"]
+members = ["dfu-flasher-nusb", "dfu-nusb"]
+resolver = "2"

@@ -1,7 +1,8 @@
-use dfu::core::Dfu;
-use dfu::error::Error;
-use dfu::status::State;
+use dfu_nusb::core::Dfu;
+use dfu_nusb::error::Error;
+use dfu_nusb::status::State;
 use log::info;
+use pretty_hex::PrettyHex;
 use std::fmt;
 use std::fs::{File, OpenOptions};
 use std::path::PathBuf;
@@ -308,27 +309,17 @@ fn run_main() -> Result<(), Error> {
         Action::ReadAddress(a) => {
             let mut buf = vec![0; a.address.1 as usize];
             let len = dfu.read_flash_to_slice(a.address.0, &mut buf)?;
-            let mut address = a.address.0;
+            // let mut address = a.address.0;
             //print!("0x{:08X} ", address);
             //address += 16;
-            for (i, b) in buf[0..len].iter().enumerate() {
-                if (i % 16) == 0 {
-                    print!("0x{:08X} ", address);
-                    print!("{:02X}", b);
-                    address += 16;
-                    println!();
-                } else {
-                    print!(":{:02X}", b);
-                }
-            }
+            println!("{:?}", buf[0..len].hex_dump());
             Ok(())
         }
         Action::SetAddress(a) => dfu.set_address(a.address),
         Action::MemoryLayout => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&dfu.memory_layout().pages()).unwrap(),
-            );
+            dfu.memory_layout().pages().iter().for_each(|p| {
+                println!("Start: 0x{:08X} Size: {} bytes", p.address, p.size)
+            });
             Ok(())
         }
     }

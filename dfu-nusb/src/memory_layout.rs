@@ -5,8 +5,8 @@ use std::str::FromStr;
 #[derive(Debug, Serialize)]
 pub struct Page {
     #[serde(serialize_with = "to_hex32_string")]
-    pub(crate) address: u32,
-    pub(crate) size: u32,
+    pub address: u32,
+    pub size: u32,
 }
 
 fn to_hex32_string<S>(value: &u32, s: S) -> Result<S::Ok, S::Error>

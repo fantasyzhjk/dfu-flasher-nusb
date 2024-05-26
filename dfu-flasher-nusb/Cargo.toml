@@ -10,9 +10,10 @@ repository = "https://github.com/fantasyzhjk/dfuflash-nusb.git"
 readme = "readme.md"
 
 [dependencies]
-dfu = { path = "../dfu", version = "0.4"}
+dfu-nusb = { path = "../dfu-nusb", version = "0.4"}
 log = "0.4"
 structopt = "0.3"
 serde_json = "1"
 env_logger = "0.11"
 nusb = "0.1.9"
+pretty-hex = "0.4"
